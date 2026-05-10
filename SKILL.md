@@ -1,82 +1,81 @@
-# SKILL.md - YOLO Pose 开发技能文档
+# SKILL.md - 项目技能手册
 
-## 技能概述
+本文件记录 YOLO Pose 人体关节识别 Web App 的开发、维护和运营技能。
 
-本项目是一个基于 Web 的 YOLO Pose 人体关节识别应用，使用 Node.js + Express 构建后端，原生 HTML/CSS/JavaScript 构建前端。
+## 1. 项目基础信息
 
-## 技术栈
+| 项目 | 内容 |
+|-----|------|
+| 项目名称 | YOLO Pose 人体关节识别 |
+| 技术栈 | Node.js + Express + 原生前端 |
+| 端口 | 8082 |
+| 工作目录 | /home/agent/.claude/workspace/project |
 
-### 后端
-- **运行时**: Node.js v20+
-- **框架**: Express.js
-- **文件上传**: Multer
-- **端口**: 8082
+## 2. 启动与停止
 
-### 前端
-- **HTML5**: video, canvas 元素
-- **MediaDevices API**: 摄像头访问
-- **Canvas 2D**: 骨骼绘制
-- **拖拽上传**: Drag and Drop API
-
-## 核心概念
-
-### YOLO Pose 模型
-- 使用 COCO 格式的 17 个关键点
-- 支持多人检测
-- 输出关键点坐标和置信度
-
-### 骨骼定义
-```
-SKELETON = [
-  [0, 1], [0, 2], [1, 3], [2, 4],  // 头部
-  [5, 6],                          // 肩部
-  [5, 7], [7, 9],                  // 左臂
-  [6, 8], [8, 10],                 // 右臂
-  [5, 11], [6, 12],                // 躯干
-  [11, 12],                        // 髋部
-  [11, 13], [13, 15],              // 左腿
-  [12, 14], [14, 16]               // 右腿
-]
+### 启动应用
+```bash
+bash user_start.sh
+# 或
+node server.js
 ```
 
-### 颜色编码
-- 每个检测到的人分配不同颜色
-- 颜色使用 HSL 色彩空间生成
-- 色调 = (人物索引 × 60) % 360
-
-## 开发指南
-
-### 添加新的检测模型
-
-1. 获取 ONNX 模型文件 (如 yolov8n-pose.onnx)
-2. 在前端引入 ONNX Runtime Web:
-```html
-<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.16.3/dist/ort.min.js"></script>
+### 停止应用
+```bash
+pkill -f "node server.js"
+# 或
+kill $(cat logs/start.log | grep PID | awk '{print $NF}')
 ```
 
-3. 修改 `detectPose` 函数:
-```javascript
-async function detectPose(frame) {
-  const session = await ort.InferenceSession.create('/models/yolov8n-pose.onnx');
-  const tensor = await preprocessFrame(frame);
-  const output = await session.run({ input: tensor });
-  return postprocessYOLOOutput(output);
-}
+### 检查运行状态
+```bash
+curl http://localhost:8082/api/status
 ```
 
-### 自定义骨骼样式
+## 3. 常用命令
 
-修改 `SKELETON` 数组可自定义骨骼连接方式:
-```javascript
-const SKELETON = [
-  [5, 6],   // 肩部连线
-  // ... 添加更多连线
-];
+### 安装依赖
+```bash
+npm install
 ```
 
-### 添加新功能
+### 查看日志
+```bash
+tail -f logs/start.log    # 启动日志
+tail -f logs/run.log      # 运行日志
+```
 
-1. **添加新的 API 端点** - 在 `server.js` 中添加:
+### Git 操作
+```bash
+git add .
+git commit -m "描述本次变更"
+git status
+```
+
+## 4. 故障排查
+
+### 端口被占用
+```bash
+lsof -i :8082
+# 或
+netstat -tlnp | grep 8082
+```
+
+### 清理上传目录
+```bash
+rm -rf uploads/*
+```
+
+### 重建 node_modules
+```bash
+rm -rf node_modules
+npm install
+```
+
+## 5. 开发指南
+
+### 添加新 API 路由
+在 `server.js` 中添加：
 ```javascript
 app.post('/api/new-endpoint', (req, res) => {
   // 处理逻辑
@@ -84,48 +83,44 @@ app.post('/api/new-endpoint', (req, res) => {
 });
 ```
 
-2. **添加新的前端页面** - 创建新 HTML 文件:
-```html
-<!-- new-page.html -->
-<!DOCTYPE html>
-<html>
-<head>
-  <title>新页面</title>
-</head>
-<body>
-  <!-- 页面内容 -->
-</body>
-</html>
-```
+### 修改前端
+直接编辑 `index.html`，使用原生 JavaScript。
 
-## 调试技巧
-
-### 检查摄像头权限
-```javascript
-navigator.mediaDevices.getUserMedia({ video: true })
-  .then(stream => console.log('Camera OK'))
-  .catch(err => console.error('Camera Error:', err));
-```
-
-### 打印关键点数据
-```javascript
-console.log('Persons:', JSON.stringify(persons, null, 2));
-```
-
-### 检查服务器状态
+### 添加新依赖
 ```bash
-curl http://localhost:8082/api/status
+npm install <package-name>
 ```
 
-## 性能优化
+## 6. 部署检查清单
 
-1. **视频帧处理**: 使用 requestAnimationFrame
-2. **Canvas 操作**: 先绘制背景，再叠加骨骼
-3. **关键点过滤**: 仅绘制置信度 > 0.3 的点
+- [x] user_start.sh 存在且可执行
+- [x] npm 依赖已安装
+- [x] Git 仓库已初始化
+- [x] 8082 端口服务正常
+- [x] 日志目录存在
+- [x] README.md 已更新
+- [x] SKILL.md 已创建
 
-## 相关资源
+## 7. Supabase 数据库连接
 
-- [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
-- [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/)
-- [MediaDevices API](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices)
-- [Canvas 2D API](https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D)
+项目可集成 Supabase 作为后端数据库：
+
+**连接字符串:**
+```
+postgresql://postgres.uacwkmdyekxyqtopdele:Black_supabase00@aws-1-ap-northeast-2.pooler.supabase.com:5432/postgres
+```
+
+**安装方法:**
+```bash
+npm install @supabase/supabase-js @supabase/ssr
+```
+
+## 8. 关键文件路径
+
+| 文件 | 路径 |
+|-----|------|
+| 启动脚本 | /home/agent/.claude/workspace/project/user_start.sh |
+| 服务器 | /home/agent/.claude/workspace/project/server.js |
+| 前端页面 | /home/agent/.claude/workspace/project/index.html |
+| 启动日志 | /home/agent/.claude/workspace/project/logs/start.log |
+| 容器规范 | /home/agent/.claude/workspace/project/systemreadme.md |

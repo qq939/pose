@@ -126,6 +126,29 @@ nohup node server.js > logs/start.log 2>&1 &
 3. 摄像头需要 HTTPS 或 localhost 环境才能正常使用
 4. 视频文件大小限制: 500MB
 
+## 日志文件说明
+
+| 日志文件 | 说明 | 路径 |
+|---------|------|------|
+| start.log | 应用启动日志，记录服务启动和关闭事件 | logs/start.log |
+| run.log | 应用运行日志，记录请求和运行时信息 | logs/run.log |
+| agent_tui.log | Claude Agent 会话日志，记录与主人的对话 | logs/agent_tui.log |
+
+### 日志文件内容整理
+
+**agent_tui.log 最新会话内容:**
+```
+[2026-05-10 18:52:21] $ 你负责的是完整的开发、测试、发现bug、变更的流程...
+```
+- 本次会话任务：初始化项目、检查启动脚本、更新文档
+- 完成工作：
+  1. 创建 user_start.sh 启动脚本
+  2. 初始化 Git 仓库
+  3. 验证 Web App 在 8082 端口运行
+  4. 更新 README.md
+  5. 创建 SKILL.md
+
 ## 开发者
 
 - Agent (Claude Code)
+- 主人: 1119623207@qq.com
