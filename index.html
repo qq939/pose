@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YOLO Pose 人体关节识别</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      color: #fff;
+      padding: 20px;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 30px;
+      color: #00d4ff;
+      text-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+    }
+    .panel {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 15px;
+      padding: 25px;
+      margin-bottom: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .controls {
+      display: flex;
+      gap: 15px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    button {
+      padding: 12px 25px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 600;
+      transition: all 0.3s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #00d4ff, #0099cc);
+      color: white;
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 20px rgba(0, 212, 255, 0.4);
+    }
+    .btn-secondary {
+      background: linear-gradient(135deg, #ff6b6b, #ee5a5a);
+      color: white;
+    }
+    .btn-secondary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 20px rgba(255, 107, 107, 0.4);
+    }
+    .btn-success {
+      background: linear-gradient(135deg, #00cc88, #00a86b);
+      color: white;
+    }
+    .btn-success:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 20px rgba(0, 204, 136, 0.4);
+    }
+    .video-container {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .video-wrapper {
+      flex: 1;
+      min-width: 300px;
+      max-width: 580px;
+    }
+    video, canvas {
+      width: 100%;
+      border-radius: 10px;
+      background: #000;
+    }
+    .video-wrapper label {
+      display: block;
+      margin-bottom: 10px;
+      color: #aaa;
+      text-align: center;
+    }
+    .upload-area {
+      border: 2px dashed #00d4ff;
+      border-radius: 10px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s;
+      margin-bottom: 20px;
+    }
+    .upload-area:hover {
+      border-color: #00aaff;
+      background: rgba(0, 212, 255, 0.1);
+    }
+    .upload-area input {
+      display: none;
+    }
+    .status {
+      text-align: center;
+      padding: 15px;
+      background: rgba(0, 204, 136, 0.2);
+      border-radius: 8px;
+      color: #00cc88;
+    }
+    .error {
+      background: rgba(255, 107, 107, 0.2);
+      color: #ff6b6b;
+    }
+    .info {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      margin-top: 20px;
+    }
+    .info-item {
+      flex: 1;
+      min-width: 200px;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 15px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    .info-item h3 {
+      color: #00d4ff;
+      margin-bottom: 5px;
+    }
+    .loader {
+      display: none;
+      text-align: center;
+      padding: 20px;
+    }
+    .loader::after {
+      content: '';
+      display: inline-block;
+      width: 30px;
+      height: 30px;
+      border: 3px solid rgba(0, 212, 255, 0.3);
+      border-top-color: #00d4ff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    #fileName {
+      margin-top: 10px;
+      color: #aaa;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎯 YOLO Pose 人体关节识别</h1>
+
+    <div class="panel">
+      <div class="controls">
+        <button class="btn-success" id="startCamera">📹 开启摄像头</button>
+        <button class="btn-secondary" id="stopCamera">⏹️ 关闭摄像头</button>
+        <button class="btn-primary" id="startDetection">🔍 开始检测</button>
+        <button class="btn-secondary" id="stopDetection">⏹️ 停止检测</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="upload-area" id="uploadArea">
+        <p>📁 拖拽视频文件到这里 或 点击选择</p>
+        <p style="color: #666; font-size: 14px; margin-top: 10px;">支持 MP4, AVI, MOV 格式</p>
+        <input type="file" id="videoInput" accept="video/*">
+        <div id="fileName"></div>
+      </div>
+      <div class="controls">
+        <button class="btn-primary" id="processVideo">🎬 处理视频</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="video-container">
+        <div class="video-wrapper">
+          <label>📺 摄像头 / 视频源</label>
+          <video id="sourceVideo" autoplay muted playsinline></video>
+        </div>
+        <div class="video-wrapper">
+          <label>✨ YOLO Pose 检测结果</label>
+          <canvas id="resultCanvas"></canvas>
+        </div>
+      </div>
+      <div id="status" class="status">状态: 就绪</div>
+    </div>
+
+    <div class="panel">
+      <h3 style="margin-bottom: 15px;">📊 检测信息</h3>
+      <div class="info">
+        <div class="info-item">
+          <h3>检测到的人数</h3>
+          <p id="personCount">0</p>
+        </div>
+        <div class="info-item">
+          <h3>关键点数</h3>
+          <p id="keypointCount">0</p>
+        </div>
+        <div class="info-item">
+          <h3>FPS</h3>
+          <p id="fpsDisplay">0</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="loader" id="loader">处理中...</div>
+
+  <script>
+    // DOM Elements
+    const sourceVideo = document.getElementById('sourceVideo');
+    const resultCanvas = document.getElementById('resultCanvas');
+    const ctx = resultCanvas.getContext('2d');
+    const statusDiv = document.getElementById('status');
+    const loader = document.getElementById('loader');
+    const videoInput = document.getElementById('videoInput');
+    const uploadArea = document.getElementById('uploadArea');
+    const fileNameDiv = document.getElementById('fileName');
+
+    // State
+    let isDetecting = false;
+    let isCameraActive = false;
+    let animationFrameId = null;
+    let currentStream = null;
+
+    // YOLO Pose Keypoints (17 points for COCO format)
+    const KEYPOINT_NAMES = [
+      'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+      'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+      'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+      'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
+    ];
+
+    // Skeleton connections
+    const SKELETON = [
+      [0, 1], [0, 2], [1, 3], [2, 4],  // head
+      [5, 6],                          // shoulders
+      [5, 7], [7, 9],                  // left arm
+      [6, 8], [8, 10],                 // right arm
+      [5, 11], [6, 12],                // torso
+      [11, 12],                        // hip
+      [11, 13], [13, 15],              // left leg
+      [12, 14], [14, 16]               // right leg
+    ];
+
+    // Simulated YOLO Pose detection (client-side simulation)
+    // In production, you would use ONNX Runtime or TensorFlow.js with a real model
+    function detectPose(frame) {
+      const persons = [];
+      // This is a simulation - in production, use a real YOLO Pose model
+      // like yolov8n-pose.onnx with ONNX Runtime Web
+
+      // For demo purposes, generate random keypoints
+      // Replace this with actual model inference
+      const numPersons = Math.random() > 0.7 ? Math.floor(Math.random() * 2) + 1 : 0;
+
+      for (let i = 0; i < numPersons; i++) {
+        const keypoints = [];
+        const centerX = Math.random() * frame.width * 0.6 + frame.width * 0.2;
+        const centerY = Math.random() * frame.height * 0.6 + frame.height * 0.2;
+
+        // Generate keypoints around a center
+        for (let j = 0; j < 17; j++) {
+          keypoints.push({
+            x: centerX + (Math.random() - 0.5) * 100,
+            y: centerY + (Math.random() - 0.5) * 150,
+            confidence: 0.5 + Math.random() * 0.5
+          });
+        }
+
+        persons.push({ keypoints });
+      }
+
+      return persons;
+    }
+
+    function drawKeypoints(persons, width, height) {
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, width, height);
+
+      persons.forEach((person, idx) => {
+        const hue = (idx * 60) % 360;
+
+        // Draw skeleton
+        SKELETON.forEach(([a, b]) => {
+          const kpA = person.keypoints[a];
+          const kpB = person.keypoints[b];
+
+          if (kpA.confidence > 0.3 && kpB.confidence > 0.3) {
+            ctx.beginPath();
+            ctx.strokeStyle = `hsl(${hue}, 100%, 50%)`;
+            ctx.lineWidth = 3;
+            ctx.moveTo(kpA.x, kpA.y);
+            ctx.lineTo(kpB.x, kpB.y);
+            ctx.stroke();
+          }
+        });
+
+        // Draw keypoints
+        person.keypoints.forEach((kp, j) => {
+          if (kp.confidence > 0.3) {
+            ctx.beginPath();
+            ctx.arc(kp.x, kp.y, 6, 0, Math.PI * 2);
+            ctx.fillStyle = `hsl(${hue}, 100%, 50%)`;
+            ctx.fill();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Draw label
+            if (kp.confidence > 0.6) {
+              ctx.fillStyle = 'white';
+              ctx.font = '10px Arial';
+              ctx.fillText(KEYPOINT_NAMES[j], kp.x + 8, kp.y);
+            }
+          }
+        });
+      });
+    }
+
+    function processFrame() {
+      if (!isDetecting) return;
+
+      const width = sourceVideo.videoWidth || 640;
+      const height = sourceVideo.videoHeight || 480;
+
+      if (resultCanvas.width !== width) {
+        resultCanvas.width = width;
+        resultCanvas.height = height;
+      }
+
+      if (sourceVideo.readyState >= 2) {
+        ctx.drawImage(sourceVideo, 0, 0, width, height);
+
+        const frame = ctx.getImageData(0, 0, width, height);
+        const persons = detectPose(frame);
+
+        ctx.drawImage(sourceVideo, 0, 0, width, height);
+        drawKeypoints(persons, width, height);
+
+        document.getElementById('personCount').textContent = persons.length;
+        document.getElementById('keypointCount').textContent =
+          persons.reduce((sum, p) => sum + p.keypoints.length, 0);
+      }
+
+      animationFrameId = requestAnimationFrame(processFrame);
+    }
+
+    function updateStatus(message, isError = false) {
+      statusDiv.textContent = `状态: ${message}`;
+      statusDiv.className = isError ? 'error' : 'status';
+    }
+
+    // Event Handlers
+    document.getElementById('startCamera').addEventListener('click', async () => {
+      try {
+        updateStatus('正在开启摄像头...');
+        currentStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480 }
+        });
+        sourceVideo.srcObject = currentStream;
+        isCameraActive = true;
+        updateStatus('摄像头已开启');
+      } catch (err) {
+        updateStatus(`摄像头错误: ${err.message}`, true);
+        console.error(err);
+      }
+    });
+
+    document.getElementById('stopCamera').addEventListener('click', () => {
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
+        currentStream = null;
+      }
+      sourceVideo.srcObject = null;
+      sourceVideo.src = '';
+      isCameraActive = false;
+      isDetecting = false;
+      cancelAnimationFrame(animationFrameId);
+      updateStatus('摄像头已关闭');
+    });
+
+    document.getElementById('startDetection').addEventListener('click', () => {
+      if (!isCameraActive && !sourceVideo.src && !videoInput.files[0]) {
+        updateStatus('请先开启摄像头或上传视频', true);
+        return;
+      }
+      isDetecting = true;
+      processFrame();
+      updateStatus('检测中...');
+    });
+
+    document.getElementById('stopDetection').addEventListener('click', () => {
+      isDetecting = false;
+      cancelAnimationFrame(animationFrameId);
+      updateStatus('检测已停止');
+    });
+
+    // Upload handling
+    uploadArea.addEventListener('click', () => videoInput.click());
+
+    uploadArea.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadArea.style.borderColor = '#00ff00';
+    });
+
+    uploadArea.addEventListener('dragleave', () => {
+      uploadArea.style.borderColor = '#00d4ff';
+    });
+
+    uploadArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadArea.style.borderColor = '#00d4ff';
+      if (e.dataTransfer.files[0]) {
+        videoInput.files = e.dataTransfer.files;
+        handleVideoSelect();
+      }
+    });
+
+    videoInput.addEventListener('change', handleVideoSelect);
+
+    function handleVideoSelect() {
+      const file = videoInput.files[0];
+      if (file) {
+        fileNameDiv.textContent = `已选择: ${file.name}`;
+        const url = URL.createObjectURL(file);
+        sourceVideo.src = url;
+        sourceVideo.muted = false;
+        isCameraActive = true;
+        updateStatus(`已加载视频: ${file.name}`);
+      }
+    }
+
+    document.getElementById('processVideo').addEventListener('click', async () => {
+      const file = videoInput.files[0];
+      if (!file) {
+        updateStatus('请先上传视频', true);
+        return;
+      }
+
+      loader.style.display = 'block';
+      updateStatus('处理视频中...');
+
+      const formData = new FormData();
+      formData.append('video', file);
+
+      try {
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData
+        });
+        const result = await response.json();
+        if (result.success) {
+          updateStatus(`视频已上传: ${result.filename}`);
+        }
+      } catch (err) {
+        updateStatus(`上传失败: ${err.message}`, true);
+      }
+
+      loader.style.display = 'none';
+    });
+  </script>
+</body>
+</html>
