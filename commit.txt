@@ -1,1 +1,2 @@
 1aa5362 Initial commit: YOLO Pose Web App with video upload and camera support
+2a96d98 初始化项目：创建启动脚本、更新文档、完成Git初始化
