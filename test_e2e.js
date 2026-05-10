@@ -52,6 +52,8 @@ async function testWebApp() {
       { selector: '#processVideo', name: 'Process Video button' },
       { selector: '#sourceVideo', name: 'Source video' },
       { selector: '#resultCanvas', name: 'Result canvas' },
+      { selector: '#confidenceSlider', name: 'Confidence slider' },
+      { selector: '#confidenceValue', name: 'Confidence value display' },
     ];
 
     for (const el of elements) {
@@ -88,6 +90,19 @@ async function testWebApp() {
     const uploadArea = await page.$('#uploadArea');
     if (uploadArea) {
       console.log('  ✓ Upload area found');
+    }
+
+    // Test 7: Confidence slider
+    console.log('Test 7: Testing confidence slider...');
+    const sliderInitialValue = await page.textContent('#confidenceValue');
+    console.log(`  Initial confidence: ${sliderInitialValue}`);
+
+    await page.fill('#confidenceSlider', '50');
+    await page.waitForTimeout(100);
+    const sliderNewValue = await page.textContent('#confidenceValue');
+    console.log(`  New confidence after slider change: ${sliderNewValue}`);
+    if (sliderNewValue === '0.50') {
+      console.log('  ✓ Confidence slider works');
     }
 
     // Report errors

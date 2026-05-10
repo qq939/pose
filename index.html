@@ -162,6 +162,43 @@
       margin-top: 10px;
       color: #aaa;
     }
+    .slider-container {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      justify-content: center;
+      margin-top: 15px;
+      padding: 15px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 8px;
+    }
+    .slider-container label {
+      color: #00d4ff;
+      min-width: 120px;
+    }
+    .slider-container input[type="range"] {
+      flex: 1;
+      max-width: 300px;
+      height: 8px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.2);
+      outline: none;
+      -webkit-appearance: none;
+    }
+    .slider-container input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #00d4ff;
+      cursor: pointer;
+    }
+    .confidence-value {
+      min-width: 60px;
+      text-align: center;
+      font-weight: bold;
+      color: #00cc88;
+    }
   </style>
 </head>
 <body>
@@ -219,6 +256,11 @@
           <p id="fpsDisplay">0</p>
         </div>
       </div>
+      <div class="slider-container">
+        <label>置信度阈值:</label>
+        <input type="range" id="confidenceSlider" min="0" max="100" value="30">
+        <span class="confidence-value" id="confidenceValue">0.30</span>
+      </div>
     </div>
   </div>
 
@@ -240,6 +282,7 @@
     let isCameraActive = false;
     let animationFrameId = null;
     let currentStream = null;
+    let confidenceThreshold = 0.3;
 
     // YOLO Pose Keypoints (17 points for COCO format)
     const KEYPOINT_NAMES = [
@@ -293,8 +336,8 @@
     }
 
     function drawKeypoints(persons, width, height) {
-      ctx.fillStyle = 'black';
-      ctx.fillRect(0, 0, width, height);
+      // Draw video frame first (background)
+      ctx.drawImage(sourceVideo, 0, 0, width, height);
 
       persons.forEach((person, idx) => {
         const hue = (idx * 60) % 360;
@@ -304,7 +347,7 @@
           const kpA = person.keypoints[a];
           const kpB = person.keypoints[b];
 
-          if (kpA.confidence > 0.3 && kpB.confidence > 0.3) {
+          if (kpA.confidence > confidenceThreshold && kpB.confidence > confidenceThreshold) {
             ctx.beginPath();
             ctx.strokeStyle = `hsl(${hue}, 100%, 50%)`;
             ctx.lineWidth = 3;
@@ -316,7 +359,7 @@
 
         // Draw keypoints
         person.keypoints.forEach((kp, j) => {
-          if (kp.confidence > 0.3) {
+          if (kp.confidence > confidenceThreshold) {
             ctx.beginPath();
             ctx.arc(kp.x, kp.y, 6, 0, Math.PI * 2);
             ctx.fillStyle = `hsl(${hue}, 100%, 50%)`;
@@ -326,7 +369,7 @@
             ctx.stroke();
 
             // Draw label
-            if (kp.confidence > 0.6) {
+            if (kp.confidence > confidenceThreshold + 0.3) {
               ctx.fillStyle = 'white';
               ctx.font = '10px Arial';
               ctx.fillText(KEYPOINT_NAMES[j], kp.x + 8, kp.y);
@@ -348,12 +391,8 @@
       }
 
       if (sourceVideo.readyState >= 2) {
-        ctx.drawImage(sourceVideo, 0, 0, width, height);
-
-        const frame = ctx.getImageData(0, 0, width, height);
+        const frame = { width, height };
         const persons = detectPose(frame);
-
-        ctx.drawImage(sourceVideo, 0, 0, width, height);
         drawKeypoints(persons, width, height);
 
         document.getElementById('personCount').textContent = persons.length;
@@ -492,6 +531,12 @@
       }
 
       loader.style.display = 'none';
+    });
+
+    // Confidence slider handler
+    document.getElementById('confidenceSlider').addEventListener('input', (e) => {
+      confidenceThreshold = e.target.value / 100;
+      document.getElementById('confidenceValue').textContent = confidenceThreshold.toFixed(2);
     });
   </script>
 </body>
