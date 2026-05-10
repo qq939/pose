@@ -373,6 +373,12 @@
     document.getElementById('startCamera').addEventListener('click', async () => {
       try {
         updateStatus('正在开启摄像头...');
+
+        // Check if mediaDevices API is available
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('浏览器不支持摄像头访问 (getUserMedia 不可用)');
+        }
+
         currentStream = await navigator.mediaDevices.getUserMedia({
           video: { width: 640, height: 480 }
         });
@@ -380,8 +386,18 @@
         isCameraActive = true;
         updateStatus('摄像头已开启');
       } catch (err) {
-        updateStatus(`摄像头错误: ${err.message}`, true);
-        console.error(err);
+        console.error('Camera error:', err);
+        let errorMsg = err.message;
+        if (err.name === 'NotAllowedError') {
+          errorMsg = '摄像头访问被拒绝，请允许浏览器访问摄像头';
+        } else if (err.name === 'NotFoundError') {
+          errorMsg = '未找到摄像头设备';
+        } else if (err.name === 'NotReadableError') {
+          errorMsg = '摄像头被其他程序占用';
+        } else if (err.name === 'OverconstrainedError') {
+          errorMsg = '摄像头不支持请求的分辨率';
+        }
+        updateStatus(`摄像头错误: ${errorMsg}`, true);
       }
     });
 
