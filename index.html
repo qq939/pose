@@ -297,7 +297,7 @@
     let detectionResults = null;
     let processedVideoPath = null;
     let sampleCount = 0;
-    let lastDetectTime = 0;
+    let realtimeDetectionInFlight = false;
 
     // YOLO Pose Keypoints (17 points for COCO format)
     const KEYPOINT_NAMES = [
@@ -342,7 +342,9 @@
     function drawKeypoints(persons, canvasWidth, canvasHeight, scaleX, scaleY) {
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
-      if (sourceVideo.readyState > 0 && sourceVideo.videoWidth > 0) {
+      if (limitedVideoCanvas && sourceVideo.readyState > 0) {
+        ctx.drawImage(limitedVideoCanvas, 0, 0, canvasWidth, canvasHeight);
+      } else if (sourceVideo.readyState > 0 && sourceVideo.videoWidth > 0) {
         ctx.drawImage(sourceVideo, 0, 0, canvasWidth, canvasHeight);
       }
 
@@ -405,15 +407,11 @@
         resultCanvas.height = canvasDisplayHeight;
       }
 
-      if (sourceVideo.readyState >= 2) {
-        if (isCameraActive) {
-          detectFrameRealtime();
-        } else {
-          if (currentTime !== lastVideoTime) {
-            lastVideoTime = currentTime;
-            lastFrameData = getPoseFromResults(currentTime);
-          }
-        }
+      if (sourceVideo.readyState >= 2 && isCameraActive) {
+        detectFrameRealtime();
+      } else if (sourceVideo.readyState >= 2 && currentTime !== lastVideoTime) {
+        lastVideoTime = currentTime;
+        lastFrameData = getPoseFromResults(currentTime);
       }
 
       if (lastFrameData) {
@@ -431,19 +429,19 @@
     }
 
     async function detectFrameRealtime() {
-      if (!isCameraActive) return;
-      
-      const now = Date.now();
-      const interval = 1000 / fpsLimit;
-      if (now - lastDetectTime < interval) return;
-      lastDetectTime = now;
+      if (!isCameraActive || realtimeDetectionInFlight) return;
+      realtimeDetectionInFlight = true;
       
       try {
         const canvas = document.createElement('canvas');
         canvas.width = 320;
         canvas.height = 240;
         const tempCtx = canvas.getContext('2d');
-        tempCtx.drawImage(sourceVideo, 0, 0, 320, 240);
+        if (limitedVideoCanvas) {
+          tempCtx.drawImage(limitedVideoCanvas, 0, 0, 320, 240);
+        } else {
+          tempCtx.drawImage(sourceVideo, 0, 0, 320, 240);
+        }
         const imageData = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
         
         const response = await fetch('/api/detect-frame', {
@@ -458,6 +456,8 @@
         }
       } catch (e) {
         console.error('Frame detection error:', e);
+      } finally {
+        realtimeDetectionInFlight = false;
       }
     }
 
@@ -526,22 +526,23 @@
       try {
         updateStatus('正在开启摄像头...');
 
-        // Check if mediaDevices API is available
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          throw new Error('浏览器不支持摄像头访问 (getUserMedia 不可用)');
+          throw new Error('浏览器不支持摄像头访问');
         }
 
         currentStream = await navigator.mediaDevices.getUserMedia({
           video: { width: 640, height: 480 }
         });
-        sourceVideo.srcObject = currentStream;
         isCameraActive = true;
+        sourceVideo.srcObject = currentStream;
+        
+        startLimitedVideoLoop();
         updateStatus('摄像头已开启');
       } catch (err) {
         console.error('Camera error:', err);
         let errorMsg = err.message;
         if (err.name === 'NotAllowedError') {
-          errorMsg = '摄像头访问被拒绝，请允许浏览器访问摄像头';
+          errorMsg = '摄像头访问被拒绝';
         } else if (err.name === 'NotFoundError') {
           errorMsg = '未找到摄像头设备';
         } else if (err.name === 'NotReadableError') {
@@ -553,15 +554,59 @@
       }
     });
 
+    let limitedVideoCanvas = null;
+    let limitedVideoCtx = null;
+    let limitedFrameTimerId = null;
+
+    function getFrameIntervalMs() {
+      return 1000 / Math.max(fpsLimit, 1);
+    }
+
+    function startLimitedVideoLoop() {
+      stopLimitedVideoLoop();
+
+      limitedVideoCanvas = document.createElement('canvas');
+      limitedVideoCanvas.width = 640;
+      limitedVideoCanvas.height = 480;
+      limitedVideoCtx = limitedVideoCanvas.getContext('2d');
+
+      const drawLimitedFrame = async () => {
+        if (!isCameraActive) return;
+
+        if (sourceVideo.readyState >= 2) {
+          limitedVideoCtx.drawImage(sourceVideo, 0, 0, 640, 480);
+
+          if (isDetecting) {
+            await detectFrameRealtime();
+          }
+        }
+
+        limitedFrameTimerId = window.setTimeout(drawLimitedFrame, getFrameIntervalMs());
+      };
+      
+      drawLimitedFrame();
+    }
+
+    function stopLimitedVideoLoop() {
+      if (limitedFrameTimerId) {
+        clearTimeout(limitedFrameTimerId);
+        limitedFrameTimerId = null;
+      }
+    }
+
     document.getElementById('stopCamera').addEventListener('click', () => {
       if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
         currentStream = null;
       }
+      stopLimitedVideoLoop();
+      limitedVideoCanvas = null;
+      limitedVideoCtx = null;
       sourceVideo.srcObject = null;
       sourceVideo.src = '';
       isCameraActive = false;
       isDetecting = false;
+      realtimeDetectionInFlight = false;
       cancelAnimationFrame(animationFrameId);
       updateStatus('摄像头已关闭');
     });
@@ -611,11 +656,13 @@
     function handleVideoSelect() {
       const file = videoInput.files[0];
       if (file) {
+        stopLimitedVideoLoop();
         fileNameDiv.textContent = `已选择: ${file.name}`;
         const url = URL.createObjectURL(file);
         sourceVideo.src = url;
         sourceVideo.muted = false;
-        isCameraActive = true;
+        sourceVideo.srcObject = null;
+        isCameraActive = false;
         lastVideoTime = -1;
         lastFrameData = null;
         detectionResults = null;
@@ -655,7 +702,7 @@
           body: JSON.stringify({
             videoPath: `/uploads/${uploadResult.filename}`,
             confThreshold: confidenceThreshold,
-            skipFrames: samplingRate
+            skipFrames: 0
           })
         });
         const processResult = await processResponse.json();
@@ -682,6 +729,9 @@
     document.getElementById('fpsLimitSlider').addEventListener('input', (e) => {
       fpsLimit = parseInt(e.target.value);
       document.getElementById('fpsLimitValue').textContent = `${fpsLimit} FPS`;
+      if (isCameraActive) {
+        startLimitedVideoLoop();
+      }
     });
   </script>
 </body>
