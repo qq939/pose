@@ -44,6 +44,83 @@ function log(message) {
   console.log(logMessage.trim());
 }
 
+let streamWorker = null;
+let streamBuffer = Buffer.alloc(0);
+let streamPending = [];
+let streamStarting = null;
+
+function startStreamWorker() {
+  if (streamWorker) return Promise.resolve(streamWorker);
+  if (streamStarting) return streamStarting;
+
+  streamStarting = new Promise((resolve, reject) => {
+    const worker = spawn(pythonBin, [pythonScript, 'stream', '0.3']);
+    streamBuffer = Buffer.alloc(0);
+    streamPending = [];
+
+    worker.stdout.on('data', (chunk) => {
+      streamBuffer = Buffer.concat([streamBuffer, chunk]);
+
+      while (streamBuffer.length >= 4) {
+        const messageSize = streamBuffer.readUInt32BE(0);
+        if (streamBuffer.length < 4 + messageSize) break;
+
+        const payload = streamBuffer.subarray(4, 4 + messageSize).toString();
+        streamBuffer = streamBuffer.subarray(4 + messageSize);
+
+        const pending = streamPending.shift();
+        if (!pending) continue;
+
+        try {
+          pending.resolve(JSON.parse(payload));
+        } catch (error) {
+          pending.reject(error);
+        }
+      }
+    });
+
+    worker.stderr.on('data', (data) => {
+      log(`Stream worker stderr: ${data.toString().trim()}`);
+    });
+
+    worker.on('error', (error) => {
+      if (streamWorker === worker) streamWorker = null;
+      streamStarting = null;
+      reject(error);
+    });
+
+    worker.on('close', (code) => {
+      if (streamWorker === worker) streamWorker = null;
+      streamStarting = null;
+      const error = new Error(`Stream worker exited with code ${code}`);
+      while (streamPending.length > 0) {
+        streamPending.shift().reject(error);
+      }
+    });
+
+    streamWorker = worker;
+    streamStarting = null;
+    resolve(worker);
+  });
+
+  return streamStarting;
+}
+
+async function detectFrameWithWorker(imageData, confThreshold) {
+  const worker = await startStreamWorker();
+  const payload = Buffer.from(JSON.stringify({ imageData, confThreshold }));
+
+  return new Promise((resolve, reject) => {
+    streamPending.push({ resolve, reject });
+
+    const header = Buffer.alloc(4);
+    header.writeUInt32BE(payload.length, 0);
+
+    worker.stdin.write(header);
+    worker.stdin.write(payload);
+  });
+}
+
 // Routes
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
@@ -122,39 +199,12 @@ app.post('/api/detect-frame', express.json({ limit: '50mb' }), (req, res) => {
     return res.status(400).json({ error: 'imageData is required' });
   }
   
-  const buffer = Buffer.from(imageData, 'base64');
-  const conf = confThreshold || 0.3;
-  
-  const pythonProcess = spawn(pythonBin, [pythonScript, 'frame', conf.toString()]);
-  
-  let output = '';
-  let errorOutput = '';
-  
-  pythonProcess.stdin.write(buffer);
-  pythonProcess.stdin.end();
-  
-  pythonProcess.stdout.on('data', (data) => {
-    output += data.toString();
-  });
-  
-  pythonProcess.stderr.on('data', (data) => {
-    errorOutput += data.toString();
-  });
-  
-  pythonProcess.on('close', (code) => {
-    if (code !== 0) {
-      log(`Frame detection error: ${errorOutput}`);
-      return res.status(500).json({ error: errorOutput || 'Detection failed' });
-    }
-    
-    try {
-      const result = JSON.parse(output);
-      res.json(result);
-    } catch (e) {
-      log(`Frame detection JSON parse error: ${output}`);
-      res.status(500).json({ error: 'Failed to parse detection result' });
-    }
-  });
+  detectFrameWithWorker(imageData, confThreshold || 0.3)
+    .then((result) => res.json(result))
+    .catch((error) => {
+      log(`Frame detection error: ${error.message}`);
+      res.status(500).json({ error: error.message || 'Detection failed' });
+    });
 });
 
 // Dataset collection endpoint

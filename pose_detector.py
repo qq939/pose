@@ -10,6 +10,7 @@ import numpy as np
 import sys
 import json
 import base64
+import struct
 from pathlib import Path
 
 try:
@@ -78,6 +79,53 @@ def detect_frame(frame, conf_threshold=0.3):
                 persons.append({"keypoints": keypoints_list})
     
     return persons
+
+
+def read_exactly(stream, size):
+    data = bytearray()
+    while len(data) < size:
+        chunk = stream.read(size - len(data))
+        if not chunk:
+            return None
+        data.extend(chunk)
+    return bytes(data)
+
+
+def stream_loop(initial_conf=0.3):
+    get_detector()
+    output = sys.stdout.buffer
+    input_stream = sys.stdin.buffer
+
+    while True:
+        header = read_exactly(input_stream, 4)
+        if header is None:
+            break
+
+        payload_size = struct.unpack(">I", header)[0]
+        payload = read_exactly(input_stream, payload_size)
+        if payload is None:
+            break
+
+        request = json.loads(payload.decode("utf-8"))
+        image_data = request.get("imageData")
+        conf = float(request.get("confThreshold", initial_conf))
+
+        result = {"success": False, "persons": []}
+        if image_data:
+            image_bytes = base64.b64decode(image_data)
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if frame is not None:
+                result = {"success": True, "persons": detect_frame(frame, conf)}
+            else:
+                result = {"success": False, "error": "Failed to decode frame"}
+        else:
+            result = {"success": False, "error": "imageData is required"}
+
+        response = json.dumps(result).encode("utf-8")
+        output.write(struct.pack(">I", len(response)))
+        output.write(response)
+        output.flush()
 
 
 def save_sample(frame, persons, images_dir, labels_dir, sample_idx):
@@ -309,6 +357,10 @@ def main():
         cap.release()
         cv2.destroyAllWindows()
         print(json.dumps({"success": True, "message": f"摄像头已关闭，已保存 {sample_idx} 个样本"}))
+
+    elif mode == "stream":
+        conf = float(sys.argv[2]) if len(sys.argv) > 2 else 0.3
+        stream_loop(conf)
 
 
 if __name__ == "__main__":

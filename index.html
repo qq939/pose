@@ -298,6 +298,7 @@
     let processedVideoPath = null;
     let sampleCount = 0;
     let realtimeDetectionInFlight = false;
+    let hasBufferedCameraFrame = false;
 
     // YOLO Pose Keypoints (17 points for COCO format)
     const KEYPOINT_NAMES = [
@@ -342,8 +343,8 @@
     function drawKeypoints(persons, canvasWidth, canvasHeight, scaleX, scaleY) {
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
-      if (limitedVideoCanvas && sourceVideo.readyState > 0) {
-        ctx.drawImage(limitedVideoCanvas, 0, 0, canvasWidth, canvasHeight);
+      if (outputVideoCanvas && hasBufferedCameraFrame) {
+        ctx.drawImage(outputVideoCanvas, 0, 0, canvasWidth, canvasHeight);
       } else if (sourceVideo.readyState > 0 && sourceVideo.videoWidth > 0) {
         ctx.drawImage(sourceVideo, 0, 0, canvasWidth, canvasHeight);
       }
@@ -408,7 +409,7 @@
       }
 
       if (sourceVideo.readyState >= 2 && isCameraActive) {
-        detectFrameRealtime();
+        // Camera mode only renders the throttled buffer as output.
       } else if (sourceVideo.readyState >= 2 && currentTime !== lastVideoTime) {
         lastVideoTime = currentTime;
         lastFrameData = getPoseFromResults(currentTime);
@@ -429,7 +430,7 @@
     }
 
     async function detectFrameRealtime() {
-      if (!isCameraActive || realtimeDetectionInFlight) return;
+      if (!isCameraActive || !stagingVideoCanvas || realtimeDetectionInFlight) return;
       realtimeDetectionInFlight = true;
       
       try {
@@ -437,11 +438,7 @@
         canvas.width = 320;
         canvas.height = 240;
         const tempCtx = canvas.getContext('2d');
-        if (limitedVideoCanvas) {
-          tempCtx.drawImage(limitedVideoCanvas, 0, 0, 320, 240);
-        } else {
-          tempCtx.drawImage(sourceVideo, 0, 0, 320, 240);
-        }
+        tempCtx.drawImage(stagingVideoCanvas, 0, 0, 320, 240);
         const imageData = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
         
         const response = await fetch('/api/detect-frame', {
@@ -452,6 +449,8 @@
         
         const result = await response.json();
         if (result.success && result.persons) {
+          outputVideoCtx.drawImage(stagingVideoCanvas, 0, 0, 640, 480);
+          hasBufferedCameraFrame = true;
           lastFrameData = result.persons;
         }
       } catch (e) {
@@ -554,8 +553,10 @@
       }
     });
 
-    let limitedVideoCanvas = null;
-    let limitedVideoCtx = null;
+    let stagingVideoCanvas = null;
+    let stagingVideoCtx = null;
+    let outputVideoCanvas = null;
+    let outputVideoCtx = null;
     let limitedFrameTimerId = null;
 
     function getFrameIntervalMs() {
@@ -565,19 +566,28 @@
     function startLimitedVideoLoop() {
       stopLimitedVideoLoop();
 
-      limitedVideoCanvas = document.createElement('canvas');
-      limitedVideoCanvas.width = 640;
-      limitedVideoCanvas.height = 480;
-      limitedVideoCtx = limitedVideoCanvas.getContext('2d');
+      stagingVideoCanvas = document.createElement('canvas');
+      stagingVideoCanvas.width = 640;
+      stagingVideoCanvas.height = 480;
+      stagingVideoCtx = stagingVideoCanvas.getContext('2d');
+      outputVideoCanvas = document.createElement('canvas');
+      outputVideoCanvas.width = 640;
+      outputVideoCanvas.height = 480;
+      outputVideoCtx = outputVideoCanvas.getContext('2d');
+      hasBufferedCameraFrame = false;
 
       const drawLimitedFrame = async () => {
         if (!isCameraActive) return;
 
         if (sourceVideo.readyState >= 2) {
-          limitedVideoCtx.drawImage(sourceVideo, 0, 0, 640, 480);
+          // Only the newest frame at release time enters staging.
+          stagingVideoCtx.drawImage(sourceVideo, 0, 0, 640, 480);
 
           if (isDetecting) {
             await detectFrameRealtime();
+          } else {
+            outputVideoCtx.drawImage(stagingVideoCanvas, 0, 0, 640, 480);
+            hasBufferedCameraFrame = true;
           }
         }
 
@@ -600,8 +610,11 @@
         currentStream = null;
       }
       stopLimitedVideoLoop();
-      limitedVideoCanvas = null;
-      limitedVideoCtx = null;
+      stagingVideoCanvas = null;
+      stagingVideoCtx = null;
+      outputVideoCanvas = null;
+      outputVideoCtx = null;
+      hasBufferedCameraFrame = false;
       sourceVideo.srcObject = null;
       sourceVideo.src = '';
       isCameraActive = false;
@@ -663,6 +676,7 @@
         sourceVideo.muted = false;
         sourceVideo.srcObject = null;
         isCameraActive = false;
+        hasBufferedCameraFrame = false;
         lastVideoTime = -1;
         lastFrameData = null;
         detectionResults = null;
