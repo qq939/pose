@@ -7,3 +7,4 @@ uploads/
 __pycache__/
 dist/
 build/
+dataset/

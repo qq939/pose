@@ -193,7 +193,7 @@ def main():
             
             frame_idx += 1
             
-            if frame_idx % 60 == 0:
+            if frame_idx % (60*fps) == 0:
                 print(f"Processed {frame_idx}/{total_frames} frames...", flush=True)
         
         cap.release()
