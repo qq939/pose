@@ -86,6 +86,8 @@
     }
     video, canvas {
       width: 100%;
+      height: auto;
+      display: block;
       border-radius: 10px;
       background: #000;
     }
@@ -351,6 +353,9 @@
     function setPoseFrameSize(width, height) {
       poseFrameWidth = width || 640;
       poseFrameHeight = height || 480;
+      const aspectRatio = `${poseFrameWidth} / ${poseFrameHeight}`;
+      sourceVideo.style.aspectRatio = aspectRatio;
+      resultCanvas.style.aspectRatio = aspectRatio;
     }
 
     function getDisplayScale() {
@@ -369,6 +374,8 @@
         scaleY: canvasDisplayHeight / poseFrameHeight
       };
     }
+
+    setPoseFrameSize(poseFrameWidth, poseFrameHeight);
 
     function drawKeypoints(persons, canvasWidth, canvasHeight, scaleX, scaleY) {
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
