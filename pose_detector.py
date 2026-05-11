@@ -251,6 +251,8 @@ def main():
             "total_input_frames": total_frames,
             "total_output_frames": len(frames_data),
             "input_fps": fps,
+            "frame_width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            "frame_height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
             "sampling_rate": f"every {skip_frames + 1} frame(s)" if skip_frames > 0 else "all frames",
             "frames": frames_data
         }

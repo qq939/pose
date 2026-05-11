@@ -285,6 +285,12 @@
     const uploadArea = document.getElementById('uploadArea');
     const fileNameDiv = document.getElementById('fileName');
 
+    sourceVideo.addEventListener('loadedmetadata', () => {
+      if (!isCameraActive) {
+        setPoseFrameSize(sourceVideo.videoWidth || 640, sourceVideo.videoHeight || 480);
+      }
+    });
+
     // State
     let isDetecting = false;
     let isCameraActive = false;
@@ -299,6 +305,8 @@
     let sampleCount = 0;
     let realtimeDetectionInFlight = false;
     let hasBufferedCameraFrame = false;
+    let poseFrameWidth = 640;
+    let poseFrameHeight = 480;
 
     // YOLO Pose Keypoints (17 points for COCO format)
     const KEYPOINT_NAMES = [
@@ -339,6 +347,28 @@
       [11, 13], [13, 15],              // left leg
       [12, 14], [14, 16]               // right leg
     ];
+
+    function setPoseFrameSize(width, height) {
+      poseFrameWidth = width || 640;
+      poseFrameHeight = height || 480;
+    }
+
+    function getDisplayScale() {
+      const canvasDisplayWidth = resultCanvas.offsetWidth || poseFrameWidth;
+      const canvasDisplayHeight = resultCanvas.offsetHeight || poseFrameHeight;
+
+      if (resultCanvas.width !== canvasDisplayWidth || resultCanvas.height !== canvasDisplayHeight) {
+        resultCanvas.width = canvasDisplayWidth;
+        resultCanvas.height = canvasDisplayHeight;
+      }
+
+      return {
+        canvasDisplayWidth,
+        canvasDisplayHeight,
+        scaleX: canvasDisplayWidth / poseFrameWidth,
+        scaleY: canvasDisplayHeight / poseFrameHeight
+      };
+    }
 
     function drawKeypoints(persons, canvasWidth, canvasHeight, scaleX, scaleY) {
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -394,19 +424,7 @@
       if (!isDetecting) return;
 
       const currentTime = sourceVideo.currentTime;
-      const videoWidth = sourceVideo.videoWidth || 640;
-      const videoHeight = sourceVideo.videoHeight || 480;
-
-      const canvasDisplayWidth = resultCanvas.offsetWidth;
-      const canvasDisplayHeight = resultCanvas.offsetHeight;
-
-      const scaleX = canvasDisplayWidth / videoWidth;
-      const scaleY = canvasDisplayHeight / videoHeight;
-
-      if (resultCanvas.width !== canvasDisplayWidth || resultCanvas.height !== canvasDisplayHeight) {
-        resultCanvas.width = canvasDisplayWidth;
-        resultCanvas.height = canvasDisplayHeight;
-      }
+      const { canvasDisplayWidth, canvasDisplayHeight, scaleX, scaleY } = getDisplayScale();
 
       if (sourceVideo.readyState >= 2 && isCameraActive) {
         // Camera mode only renders the throttled buffer as output.
@@ -435,10 +453,10 @@
       
       try {
         const canvas = document.createElement('canvas');
-        canvas.width = 320;
-        canvas.height = 240;
+        canvas.width = poseFrameWidth;
+        canvas.height = poseFrameHeight;
         const tempCtx = canvas.getContext('2d');
-        tempCtx.drawImage(stagingVideoCanvas, 0, 0, 320, 240);
+        tempCtx.drawImage(stagingVideoCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
         const imageData = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
         
         const response = await fetch('/api/detect-frame', {
@@ -449,7 +467,7 @@
         
         const result = await response.json();
         if (result.success && result.persons) {
-          outputVideoCtx.drawImage(stagingVideoCanvas, 0, 0, 640, 480);
+          outputVideoCtx.drawImage(stagingVideoCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
           hasBufferedCameraFrame = true;
           lastFrameData = result.persons;
         }
@@ -468,10 +486,14 @@
       
       try {
         const canvas = document.createElement('canvas');
-        canvas.width = sourceVideo.videoWidth || 640;
-        canvas.height = sourceVideo.videoHeight || 480;
+        canvas.width = poseFrameWidth;
+        canvas.height = poseFrameHeight;
         const tempCtx = canvas.getContext('2d');
-        tempCtx.drawImage(sourceVideo, 0, 0);
+        if (outputVideoCanvas && hasBufferedCameraFrame) {
+          tempCtx.drawImage(outputVideoCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
+        } else {
+          tempCtx.drawImage(sourceVideo, 0, 0, poseFrameWidth, poseFrameHeight);
+        }
         const imageData = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
         
         const h = canvas.height;
@@ -534,6 +556,7 @@
         });
         isCameraActive = true;
         sourceVideo.srcObject = currentStream;
+        setPoseFrameSize(640, 480);
         
         startLimitedVideoLoop();
         updateStatus('摄像头已开启');
@@ -567,12 +590,12 @@
       stopLimitedVideoLoop();
 
       stagingVideoCanvas = document.createElement('canvas');
-      stagingVideoCanvas.width = 640;
-      stagingVideoCanvas.height = 480;
+      stagingVideoCanvas.width = poseFrameWidth;
+      stagingVideoCanvas.height = poseFrameHeight;
       stagingVideoCtx = stagingVideoCanvas.getContext('2d');
       outputVideoCanvas = document.createElement('canvas');
-      outputVideoCanvas.width = 640;
-      outputVideoCanvas.height = 480;
+      outputVideoCanvas.width = poseFrameWidth;
+      outputVideoCanvas.height = poseFrameHeight;
       outputVideoCtx = outputVideoCanvas.getContext('2d');
       hasBufferedCameraFrame = false;
 
@@ -581,12 +604,12 @@
 
         if (sourceVideo.readyState >= 2) {
           // Only the newest frame at release time enters staging.
-          stagingVideoCtx.drawImage(sourceVideo, 0, 0, 640, 480);
+          stagingVideoCtx.drawImage(sourceVideo, 0, 0, poseFrameWidth, poseFrameHeight);
 
           if (isDetecting) {
             await detectFrameRealtime();
           } else {
-            outputVideoCtx.drawImage(stagingVideoCanvas, 0, 0, 640, 480);
+            outputVideoCtx.drawImage(stagingVideoCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
             hasBufferedCameraFrame = true;
           }
         }
@@ -727,6 +750,7 @@
         
         detectionResults = processResult;
         processedVideoPath = `/uploads/${uploadResult.filename}`;
+        setPoseFrameSize(processResult.frame_width || sourceVideo.videoWidth || 640, processResult.frame_height || sourceVideo.videoHeight || 480);
         updateStatus(`检测完成: ${processResult.total_output_frames}/${processResult.total_input_frames} 帧 (${processResult.sampling_rate})`);
       } catch (err) {
         updateStatus(`处理失败: ${err.message}`, true);
