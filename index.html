@@ -211,7 +211,10 @@
         <button class="btn-secondary" id="stopCamera">⏹️ 关闭摄像头</button>
         <button class="btn-primary" id="startDetection">🔍 开始检测</button>
         <button class="btn-secondary" id="stopDetection">⏹️ 停止检测</button>
+        <button class="btn-success" id="saveSample">📷 保存样本</button>
+        <button class="btn-secondary" id="clearDataset">🗑️ 清空数据集</button>
       </div>
+      <div id="datasetStatus" class="status" style="margin-top: 15px;">数据集: 0 样本</div>
     </div>
 
     <div class="panel">
@@ -230,7 +233,7 @@
       <div class="video-container">
         <div class="video-wrapper">
           <label>📺 摄像头 / 视频源</label>
-          <video id="sourceVideo" autoplay muted playsinline></video>
+          <video id="sourceVideo" playsinline controls></video>
         </div>
         <div class="video-wrapper">
           <label>✨ YOLO Pose 检测结果</label>
@@ -261,6 +264,11 @@
         <input type="range" id="confidenceSlider" min="0" max="100" value="30">
         <span class="confidence-value" id="confidenceValue">0.30</span>
       </div>
+      <div class="slider-container">
+        <label>帧采样间隔:</label>
+        <input type="range" id="samplingSlider" min="0" max="9" value="0">
+        <span class="confidence-value" id="samplingValue">全部</span>
+      </div>
     </div>
   </div>
 
@@ -283,6 +291,14 @@
     let animationFrameId = null;
     let currentStream = null;
     let confidenceThreshold = 0.3;
+    let samplingRate = 0;
+    let lastVideoTime = -1;
+    let lastFrameData = null;
+    let detectionResults = null;
+    let processedVideoPath = null;
+    let sampleCount = 0;
+    let lastDetectTime = 0;
+    let frameCounter = 0;
 
     // YOLO Pose Keypoints (17 points for COCO format)
     const KEYPOINT_NAMES = [
@@ -291,6 +307,26 @@
       'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
       'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
     ];
+
+    function getPoseFromResults(videoTime) {
+      if (!detectionResults || !processedVideoPath) return [];
+      
+      const frameRate = detectionResults.input_fps || 30;
+      const currentFrameIdx = Math.floor(videoTime * frameRate);
+      
+      let bestFrame = null;
+      for (const f of detectionResults.frames) {
+        if (f.frame <= currentFrameIdx) {
+          if (!bestFrame || f.frame > bestFrame.frame) {
+            bestFrame = f;
+          }
+        } else {
+          break;
+        }
+      }
+      
+      return bestFrame?.persons || [];
+    }
 
     // Skeleton connections
     const SKELETON = [
@@ -304,45 +340,17 @@
       [12, 14], [14, 16]               // right leg
     ];
 
-    // Simulated YOLO Pose detection (client-side simulation)
-    // In production, you would use ONNX Runtime or TensorFlow.js with a real model
-    function detectPose(frame) {
-      const persons = [];
-      // This is a simulation - in production, use a real YOLO Pose model
-      // like yolov8n-pose.onnx with ONNX Runtime Web
+    function drawKeypoints(persons, canvasWidth, canvasHeight, scaleX, scaleY) {
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
-      // For demo purposes, generate random keypoints
-      // Replace this with actual model inference
-      const numPersons = Math.random() > 0.7 ? Math.floor(Math.random() * 2) + 1 : 0;
-
-      for (let i = 0; i < numPersons; i++) {
-        const keypoints = [];
-        const centerX = Math.random() * frame.width * 0.6 + frame.width * 0.2;
-        const centerY = Math.random() * frame.height * 0.6 + frame.height * 0.2;
-
-        // Generate keypoints around a center
-        for (let j = 0; j < 17; j++) {
-          keypoints.push({
-            x: centerX + (Math.random() - 0.5) * 100,
-            y: centerY + (Math.random() - 0.5) * 150,
-            confidence: 0.5 + Math.random() * 0.5
-          });
-        }
-
-        persons.push({ keypoints });
+      if (sourceVideo.readyState > 0 && sourceVideo.videoWidth > 0) {
+        ctx.drawImage(sourceVideo, 0, 0, canvasWidth, canvasHeight);
       }
-
-      return persons;
-    }
-
-    function drawKeypoints(persons, width, height) {
-      // Draw video frame first (background)
-      ctx.drawImage(sourceVideo, 0, 0, width, height);
 
       persons.forEach((person, idx) => {
         const hue = (idx * 60) % 360;
 
-        // Draw skeleton
+        // Draw skeleton (应用缩放)
         SKELETON.forEach(([a, b]) => {
           const kpA = person.keypoints[a];
           const kpB = person.keypoints[b];
@@ -350,18 +358,19 @@
           if (kpA.confidence > confidenceThreshold && kpB.confidence > confidenceThreshold) {
             ctx.beginPath();
             ctx.strokeStyle = `hsl(${hue}, 100%, 50%)`;
-            ctx.lineWidth = 3;
-            ctx.moveTo(kpA.x, kpA.y);
-            ctx.lineTo(kpB.x, kpB.y);
+            ctx.lineWidth = 3 * scaleX;
+            ctx.moveTo(kpA.x * scaleX, kpA.y * scaleY);
+            ctx.lineTo(kpB.x * scaleX, kpB.y * scaleY);
             ctx.stroke();
           }
         });
 
-        // Draw keypoints
+        // Draw keypoints (应用缩放)
         person.keypoints.forEach((kp, j) => {
           if (kp.confidence > confidenceThreshold) {
+            const radius = 8 * scaleX;
             ctx.beginPath();
-            ctx.arc(kp.x, kp.y, 6, 0, Math.PI * 2);
+            ctx.arc(kp.x * scaleX, kp.y * scaleY, radius, 0, Math.PI * 2);
             ctx.fillStyle = `hsl(${hue}, 100%, 50%)`;
             ctx.fill();
             ctx.strokeStyle = 'white';
@@ -371,8 +380,8 @@
             // Draw label
             if (kp.confidence > confidenceThreshold + 0.3) {
               ctx.fillStyle = 'white';
-              ctx.font = '10px Arial';
-              ctx.fillText(KEYPOINT_NAMES[j], kp.x + 8, kp.y);
+              ctx.font = `${12 * scaleX}px Arial`;
+              ctx.fillText(KEYPOINT_NAMES[j], kp.x * scaleX + 10, kp.y * scaleY);
             }
           }
         });
@@ -382,25 +391,133 @@
     function processFrame() {
       if (!isDetecting) return;
 
-      const width = sourceVideo.videoWidth || 640;
-      const height = sourceVideo.videoHeight || 480;
+      const currentTime = sourceVideo.currentTime;
+      const videoWidth = sourceVideo.videoWidth || 640;
+      const videoHeight = sourceVideo.videoHeight || 480;
 
-      if (resultCanvas.width !== width) {
-        resultCanvas.width = width;
-        resultCanvas.height = height;
+      const canvasDisplayWidth = resultCanvas.offsetWidth;
+      const canvasDisplayHeight = resultCanvas.offsetHeight;
+
+      const scaleX = canvasDisplayWidth / videoWidth;
+      const scaleY = canvasDisplayHeight / videoHeight;
+
+      if (resultCanvas.width !== canvasDisplayWidth || resultCanvas.height !== canvasDisplayHeight) {
+        resultCanvas.width = canvasDisplayWidth;
+        resultCanvas.height = canvasDisplayHeight;
       }
 
       if (sourceVideo.readyState >= 2) {
-        const frame = { width, height };
-        const persons = detectPose(frame);
-        drawKeypoints(persons, width, height);
-
-        document.getElementById('personCount').textContent = persons.length;
-        document.getElementById('keypointCount').textContent =
-          persons.reduce((sum, p) => sum + p.keypoints.length, 0);
+        if (isCameraActive) {
+          detectFrameRealtime();
+        } else {
+          if (currentTime !== lastVideoTime) {
+            lastVideoTime = currentTime;
+            lastFrameData = getPoseFromResults(currentTime);
+          }
+        }
       }
 
+      if (lastFrameData) {
+        drawKeypoints(lastFrameData, canvasDisplayWidth, canvasDisplayHeight, scaleX, scaleY);
+        document.getElementById('personCount').textContent = lastFrameData.length;
+        document.getElementById('keypointCount').textContent =
+          lastFrameData.reduce((sum, p) => sum + p.keypoints.length, 0);
+      } else {
+        ctx.clearRect(0, 0, canvasDisplayWidth, canvasDisplayHeight);
+      }
+
+      document.getElementById('fpsDisplay').textContent = sourceVideo.paused ? '0' : '~30';
+
       animationFrameId = requestAnimationFrame(processFrame);
+    }
+
+    async function detectFrameRealtime() {
+      if (!isCameraActive) return;
+      
+      frameCounter++;
+      const skipFrames = samplingRate;
+      if (skipFrames > 0 && frameCounter % (skipFrames + 1) !== 0) return;
+      
+      const now = Date.now();
+      if (now - lastDetectTime < 300) return;
+      lastDetectTime = now;
+      
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 320;
+        canvas.height = 240;
+        const tempCtx = canvas.getContext('2d');
+        tempCtx.drawImage(sourceVideo, 0, 0, 320, 240);
+        const imageData = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
+        
+        const response = await fetch('/api/detect-frame', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageData, confThreshold: confidenceThreshold })
+        });
+        
+        const result = await response.json();
+        if (result.success && result.persons) {
+          lastFrameData = result.persons;
+        }
+      } catch (e) {
+        console.error('Frame detection error:', e);
+      }
+    }
+
+    async function saveDatasetSample() {
+      if (!isCameraActive || !lastFrameData || lastFrameData.length === 0) {
+        updateStatus('请先开启摄像头并检测到人体', true);
+        return;
+      }
+      
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = sourceVideo.videoWidth || 640;
+        canvas.height = sourceVideo.videoHeight || 480;
+        const tempCtx = canvas.getContext('2d');
+        tempCtx.drawImage(sourceVideo, 0, 0);
+        const imageData = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+        
+        const h = canvas.height;
+        const w = canvas.width;
+        let labelData = '';
+        
+        for (const person of lastFrameData) {
+          const keypoints = person.keypoints;
+          const cx = keypoints.reduce((s, kp) => s + kp.x, 0) / keypoints.length / w;
+          const cy = keypoints.reduce((s, kp) => s + kp.y, 0) / keypoints.length / h;
+          const width = (Math.max(...keypoints.map(kp => kp.x)) - Math.min(...keypoints.map(kp => kp.x))) / w;
+          const height = (Math.max(...keypoints.map(kp => kp.y)) - Math.min(...keypoints.map(kp => kp.y))) / h;
+          
+          labelData += `0 ${cx.toFixed(6)} ${cy.toFixed(6)} ${width.toFixed(6)} ${height.toFixed(6)}`;
+          for (const kp of keypoints) {
+            labelData += ` ${(kp.x / w).toFixed(6)} ${(kp.y / h).toFixed(6)} ${kp.confidence.toFixed(3)}`;
+          }
+          labelData += '\n';
+        }
+        
+        const response = await fetch('/api/save-dataset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageData, labelData, sampleIndex: sampleCount })
+        });
+        
+        const result = await response.json();
+        if (result.success) {
+          sampleCount++;
+          document.getElementById('datasetStatus').textContent = `数据集: ${sampleCount} 样本`;
+          updateStatus(`样本 ${sampleCount} 已保存`);
+        }
+      } catch (e) {
+        updateStatus(`保存失败: ${e.message}`, true);
+      }
+    }
+
+    function clearDataset() {
+      sampleCount = 0;
+      document.getElementById('datasetStatus').textContent = '数据集: 0 样本';
+      updateStatus('数据集已清空');
     }
 
     function updateStatus(message, isError = false) {
@@ -469,6 +586,9 @@
       updateStatus('检测已停止');
     });
 
+    document.getElementById('saveSample').addEventListener('click', saveDatasetSample);
+    document.getElementById('clearDataset').addEventListener('click', clearDataset);
+
     // Upload handling
     uploadArea.addEventListener('click', () => videoInput.click());
 
@@ -500,6 +620,10 @@
         sourceVideo.src = url;
         sourceVideo.muted = false;
         isCameraActive = true;
+        lastVideoTime = -1;
+        lastFrameData = null;
+        detectionResults = null;
+        processedVideoPath = null;
         updateStatus(`已加载视频: ${file.name}`);
       }
     }
@@ -512,7 +636,7 @@
       }
 
       loader.style.display = 'block';
-      updateStatus('处理视频中...');
+      updateStatus('上传视频中...');
 
       const formData = new FormData();
       formData.append('video', file);
@@ -522,21 +646,47 @@
           method: 'POST',
           body: formData
         });
-        const result = await response.json();
-        if (result.success) {
-          updateStatus(`视频已上传: ${result.filename}`);
+        const uploadResult = await response.json();
+        if (!uploadResult.success) {
+          throw new Error(uploadResult.error);
         }
+        
+        updateStatus('正在检测姿态...');
+        
+        const processResponse = await fetch('/api/process-video', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            videoPath: `/uploads/${uploadResult.filename}`,
+            confThreshold: confidenceThreshold,
+            skipFrames: samplingRate
+          })
+        });
+        const processResult = await processResponse.json();
+        
+        if (processResult.error) {
+          throw new Error(processResult.error);
+        }
+        
+        detectionResults = processResult;
+        processedVideoPath = `/uploads/${uploadResult.filename}`;
+        updateStatus(`检测完成: ${processResult.total_output_frames}/${processResult.total_input_frames} 帧 (${processResult.sampling_rate})`);
       } catch (err) {
-        updateStatus(`上传失败: ${err.message}`, true);
+        updateStatus(`处理失败: ${err.message}`, true);
       }
 
       loader.style.display = 'none';
     });
 
-    // Confidence slider handler
     document.getElementById('confidenceSlider').addEventListener('input', (e) => {
       confidenceThreshold = e.target.value / 100;
       document.getElementById('confidenceValue').textContent = confidenceThreshold.toFixed(2);
+    });
+
+    document.getElementById('samplingSlider').addEventListener('input', (e) => {
+      samplingRate = parseInt(e.target.value);
+      const labels = ['全部', '每2帧', '每3帧', '每4帧', '每5帧', '每6帧', '每7帧', '每8帧', '每9帧', '每10帧'];
+      document.getElementById('samplingValue').textContent = labels[samplingRate];
     });
   </script>
 </body>
