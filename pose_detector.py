@@ -223,10 +223,12 @@ def main():
 
     elif mode == "camera":
         # ====== 摄像头实时检测 ======
-        # 输入：可选置信度阈值
+        # 输入：置信度阈值
         # 输出：弹出一个窗口，实时显示带骨骼的视频，按 q 退出
         #
         # 大白话：打开摄像头，每帧检测并画出来
+        #
+        # 用法：python pose_detector.py camera [conf_threshold]
         #
         # 输出样例（退出时）：
         # {"success": true, "message": "摄像头已关闭"}
@@ -253,8 +255,7 @@ def main():
         
         print(f"摄像头已打开，分辨率: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}", flush=True)
         print("按 'q' 或 'ESC' 退出", flush=True)
-        print("按 's' 手动保存当前帧到数据集", flush=True)
-        print(f"自动每分钟采样 1 帧 (~{int(fps*60)}帧触发一次)", flush=True)
+        print("按 's' 保存当前帧到数据集", flush=True)
         
         windowName = 'YOLO Pose Detection'
         cv2.namedWindow(windowName, cv2.WINDOW_NORMAL)
@@ -262,8 +263,8 @@ def main():
         
         sample_idx = 0
         frame_idx = 0
-        frames_per_minute = int(fps * 60)
         last_save_minute = -1
+        frames_per_minute = int(fps * 60)
         
         while True:
             ret, frame = cap.read()
@@ -294,7 +295,7 @@ def main():
             elif key == ord('s') and persons:
                 save_sample(frame, persons, images_dir, labels_dir, sample_idx)
                 sample_idx += 1
-                print(f"手动保存样本 {sample_idx}", flush=True)
+                print(f"保存样本 {sample_idx}: 检测到 {len(persons)} 人", flush=True)
             
             current_minute = frame_idx // frames_per_minute
             if current_minute > last_save_minute and frame_idx > 0 and persons:

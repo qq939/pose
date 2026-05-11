@@ -5,10 +5,13 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 
 const app = express();
-const PORT = 8082;
+const PORT = process.env.PORT || 8082;
+const API_BASE = process.env.API_BASE || '';
+const STATIC_BASE = process.env.STATIC_BASE || '/yolo/';
 
 const uploadsDir = path.join(__dirname, 'uploads');
 const logsDir = path.join(__dirname, 'logs');
+const clientDistDir = path.join(__dirname, 'client', 'dist');
 const pythonScript = path.join(__dirname, 'pose_detector.py');
 const pythonBin = path.join(__dirname, '.venv', 'bin', 'python3');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -21,9 +24,16 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 500 * 1024 * 1024 } }); // 500MB limit
 
-// Serve static files
-app.use(express.static(__dirname));
+// Serve static files from client build or root
+if (fs.existsSync(clientDistDir)) {
+  app.use(STATIC_BASE, express.static(clientDistDir));
+} else {
+  app.use(express.static(__dirname));
+}
+
+// Always serve /uploads and /dataset
 app.use('/uploads', express.static(uploadsDir));
+app.use('/dataset', express.static(path.join(__dirname, 'dataset')));
 
 // Logging helper
 function log(message) {

@@ -265,9 +265,9 @@
         <span class="confidence-value" id="confidenceValue">0.30</span>
       </div>
       <div class="slider-container">
-        <label>帧采样间隔:</label>
-        <input type="range" id="samplingSlider" min="0" max="9" value="0">
-        <span class="confidence-value" id="samplingValue">全部</span>
+        <label>检测FPS:</label>
+        <input type="range" id="fpsLimitSlider" min="1" max="30" value="1">
+        <span class="confidence-value" id="fpsLimitValue">1 FPS</span>
       </div>
     </div>
   </div>
@@ -291,14 +291,13 @@
     let animationFrameId = null;
     let currentStream = null;
     let confidenceThreshold = 0.3;
-    let samplingRate = 0;
+    let fpsLimit = 1;
     let lastVideoTime = -1;
     let lastFrameData = null;
     let detectionResults = null;
     let processedVideoPath = null;
     let sampleCount = 0;
     let lastDetectTime = 0;
-    let frameCounter = 0;
 
     // YOLO Pose Keypoints (17 points for COCO format)
     const KEYPOINT_NAMES = [
@@ -426,7 +425,7 @@
         ctx.clearRect(0, 0, canvasDisplayWidth, canvasDisplayHeight);
       }
 
-      document.getElementById('fpsDisplay').textContent = sourceVideo.paused ? '0' : '~30';
+      document.getElementById('fpsDisplay').textContent = sourceVideo.paused ? '0' : `~${fpsLimit}`;
 
       animationFrameId = requestAnimationFrame(processFrame);
     }
@@ -434,12 +433,9 @@
     async function detectFrameRealtime() {
       if (!isCameraActive) return;
       
-      frameCounter++;
-      const skipFrames = samplingRate;
-      if (skipFrames > 0 && frameCounter % (skipFrames + 1) !== 0) return;
-      
       const now = Date.now();
-      if (now - lastDetectTime < 300) return;
+      const interval = 1000 / fpsLimit;
+      if (now - lastDetectTime < interval) return;
       lastDetectTime = now;
       
       try {
@@ -683,10 +679,9 @@
       document.getElementById('confidenceValue').textContent = confidenceThreshold.toFixed(2);
     });
 
-    document.getElementById('samplingSlider').addEventListener('input', (e) => {
-      samplingRate = parseInt(e.target.value);
-      const labels = ['全部', '每2帧', '每3帧', '每4帧', '每5帧', '每6帧', '每7帧', '每8帧', '每9帧', '每10帧'];
-      document.getElementById('samplingValue').textContent = labels[samplingRate];
+    document.getElementById('fpsLimitSlider').addEventListener('input', (e) => {
+      fpsLimit = parseInt(e.target.value);
+      document.getElementById('fpsLimitValue').textContent = `${fpsLimit} FPS`;
     });
   </script>
 </body>
