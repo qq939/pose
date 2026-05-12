@@ -26,14 +26,16 @@ def get_detector():
     """
     输入：无
     输出：一个加载好的 YOLO 模型
-    
+
     大白话：加载 YOLO 模型文件，只加载一次，之后都用这个
-    
+
     示例：无（模型对象）
     """
     global detector
     if detector is None:
-        detector = YOLO("yolov8n-pose.pt")
+        script_dir = Path(__file__).parent.resolve()
+        model_path = script_dir / "yolov8n-pose.pt"
+        detector = YOLO(str(model_path))
     return detector
 
 

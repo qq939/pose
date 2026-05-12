@@ -9,11 +9,27 @@ const PORT = process.env.PORT || 8082;
 const API_BASE = process.env.API_BASE || '';
 const STATIC_BASE = process.env.STATIC_BASE || '/yolo/';
 
+// CORS configuration for hermit.dimond.top and dimond.top
+const CORS_ORIGINS = ['https://hermit.dimond.top', 'https://dimond.top'];
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (CORS_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 const uploadsDir = path.join(__dirname, 'uploads');
 const logsDir = path.join(__dirname, 'logs');
 const clientDistDir = path.join(__dirname, 'client', 'dist');
 const pythonScript = path.join(__dirname, 'pose_detector.py');
-const pythonBin = path.join(__dirname, '.venv', 'bin', 'python3');
+const pythonBin = path.join(__dirname, '.venv', 'bin', 'python');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
 
