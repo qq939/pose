@@ -498,75 +498,84 @@ const styles = {
     textAlign: 'center',
     marginBottom: '30px',
     color: '#00d4ff',
-    textShadow: '0 0 20px rgba(0, 212, 255, 0.5)'
+    textShadow: '0 0 20px rgba(0, 212, 255, 0.5)',
+    fontSize: 'clamp(1.2rem, 4vw, 2rem)'
   },
   panel: {
     background: 'rgba(255, 255, 255, 0.05)',
     borderRadius: '15px',
-    padding: '25px',
+    padding: 'clamp(15px, 4vw, 25px)',
     marginBottom: '20px',
     border: '1px solid rgba(255, 255, 255, 0.1)'
   },
   controls: {
     display: 'flex',
-    gap: '15px',
+    gap: 'clamp(8px, 2vw, 15px)',
     flexWrap: 'wrap',
     justifyContent: 'center'
   },
   btnPrimary: {
-    padding: '12px 25px',
+    padding: 'clamp(10px, 2vw, 12px) clamp(15px, 3vw, 25px)',
     border: 'none',
     borderRadius: '8px',
     cursor: 'pointer',
-    fontSize: '16px',
+    fontSize: 'clamp(14px, 3vw, 16px)',
     fontWeight: '600',
     background: 'linear-gradient(135deg, #00d4ff, #0099cc)',
-    color: 'white'
+    color: 'white',
+    touchAction: 'manipulation',
+    WebkitTapHighlightColor: 'transparent'
   },
   btnSecondary: {
-    padding: '12px 25px',
+    padding: 'clamp(10px, 2vw, 12px) clamp(15px, 3vw, 25px)',
     border: 'none',
     borderRadius: '8px',
     cursor: 'pointer',
-    fontSize: '16px',
+    fontSize: 'clamp(14px, 3vw, 16px)',
     fontWeight: '600',
     background: 'linear-gradient(135deg, #ff6b6b, #ee5a5a)',
-    color: 'white'
+    color: 'white',
+    touchAction: 'manipulation',
+    WebkitTapHighlightColor: 'transparent'
   },
   btnSuccess: {
-    padding: '12px 25px',
+    padding: 'clamp(10px, 2vw, 12px) clamp(15px, 3vw, 25px)',
     border: 'none',
     borderRadius: '8px',
     cursor: 'pointer',
-    fontSize: '16px',
+    fontSize: 'clamp(14px, 3vw, 16px)',
     fontWeight: '600',
     background: 'linear-gradient(135deg, #00cc88, #00a86b)',
-    color: 'white'
+    color: 'white',
+    touchAction: 'manipulation',
+    WebkitTapHighlightColor: 'transparent'
   },
   uploadArea: {
     border: '2px dashed #00d4ff',
     borderRadius: '10px',
-    padding: '40px',
+    padding: 'clamp(30px, 6vw, 40px)',
     textAlign: 'center',
     cursor: 'pointer',
-    marginBottom: '20px'
+    marginBottom: '20px',
+    touchAction: 'manipulation'
   },
   videoContainer: {
     display: 'flex',
-    gap: '20px',
+    gap: 'clamp(10px, 3vw, 20px)',
     flexWrap: 'wrap',
     justifyContent: 'center'
   },
   videoWrapper: {
     flex: '1',
-    minWidth: '300px',
+    minWidth: 'min(300px, 100%)',
     maxWidth: '580px'
   },
   label: {
     display: 'block',
     marginBottom: '10px',
     color: '#aaa',
-    textAlign: 'center'
+    textAlign: 'center',
+    fontSize: 'clamp(12px, 2.5vw, 14px)'
   },
   video: {
     width: '100%',
@@ -592,44 +601,48 @@ const styles = {
   },
   info: {
     display: 'flex',
-    gap: '20px',
+    gap: 'clamp(10px, 3vw, 20px)',
     flexWrap: 'wrap',
     marginTop: '20px'
   },
   infoItem: {
     flex: '1',
-    minWidth: '200px',
+    minWidth: 'min(200px, 45%)',
     background: 'rgba(0, 0, 0, 0.3)',
-    padding: '15px',
+    padding: 'clamp(10px, 2vw, 15px)',
     borderRadius: '8px',
     textAlign: 'center'
   },
   sliderContainer: {
     display: 'flex',
     alignItems: 'center',
-    gap: '15px',
+    gap: 'clamp(8px, 2vw, 15px)',
     justifyContent: 'center',
     marginTop: '15px',
-    padding: '15px',
+    padding: 'clamp(10px, 2vw, 15px)',
     background: 'rgba(0, 0, 0, 0.3)',
-    borderRadius: '8px'
+    borderRadius: '8px',
+    flexWrap: 'wrap'
   },
   sliderLabel: {
     color: '#00d4ff',
-    minWidth: '120px'
+    minWidth: 'min(100px, 30%)',
+    fontSize: 'clamp(12px, 2.5vw, 14px)'
   },
   slider: {
     flex: '1',
     maxWidth: '300px',
+    minWidth: '120px',
     height: '8px',
     borderRadius: '4px',
     background: 'rgba(255, 255, 255, 0.2)',
     outline: 'none'
   },
   confidenceValue: {
-    minWidth: '60px',
+    minWidth: 'min(60px, 20%)',
     textAlign: 'center',
     fontWeight: 'bold',
-    color: '#00cc88'
+    color: '#00cc88',
+    fontSize: 'clamp(12px, 2.5vw, 14px)'
   }
 }
