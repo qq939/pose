@@ -1,11 +1,30 @@
-logs/
-node_modules/
-.env
-uploads/
-*.log
-.DS_Store
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+.conda/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
 __pycache__/
+*.py[cod]
+*.egg-info/
 dist/
 build/
+*.egg
 dataset/
-.venv/
+
+# Local
+sessions/
+.env
+.env.local
+*.log
+
+# macOS
+.DS_Store
