@@ -138,16 +138,16 @@ async function detectFrameWithWorker(imageData, confThreshold) {
 }
 
 // Routes
-app.get('/', (req, res) => {
+app.get(API_BASE, (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.get('/api/status', (req, res) => {
+app.get(`${API_BASE}api/status`, (req, res) => {
   res.json({ status: 'running', timestamp: new Date().toISOString() });
 });
 
 // Video upload endpoint
-app.post('/api/upload', upload.single('video'), (req, res) => {
+app.post(`${API_BASE}api/upload`, upload.single('video'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No video file uploaded' });
   }
@@ -160,7 +160,7 @@ app.post('/api/upload', upload.single('video'), (req, res) => {
 });
 
 // Process video with YOLO Pose
-app.post('/api/process-video', express.json({ limit: '500mb' }), (req, res) => {
+app.post(`${API_BASE}api/process-video`, express.json({ limit: '500mb' }), (req, res) => {
   const { videoPath, confThreshold, skipFrames } = req.body;
   
   if (!videoPath) {
@@ -208,7 +208,7 @@ app.post('/api/process-video', express.json({ limit: '500mb' }), (req, res) => {
 });
 
 // Start real-time pose detection endpoint
-app.post('/api/detect-frame', express.json({ limit: '50mb' }), (req, res) => {
+app.post(`${API_BASE}api/detect-frame`, express.json({ limit: '50mb' }), (req, res) => {
   const { imageData, confThreshold } = req.body;
   
   if (!imageData) {
@@ -224,7 +224,7 @@ app.post('/api/detect-frame', express.json({ limit: '50mb' }), (req, res) => {
 });
 
 // Dataset collection endpoint
-app.post('/api/save-dataset', express.json({ limit: '50mb' }), (req, res) => {
+app.post(`${API_BASE}api/save-dataset`, express.json({ limit: '50mb' }), (req, res) => {
   const { imageData, labelData, sampleIndex } = req.body;
   
   if (!imageData || !labelData) {
