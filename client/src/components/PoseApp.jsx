@@ -1,5 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 
+const API_BASE = import.meta.env.BASE_URL || '/yolo/';
+
 const KEYPOINT_NAMES = [
   'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
   'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
@@ -103,7 +105,7 @@ export default function PoseApp() {
       tempCtx.drawImage(sourceVideoRef.current, 0, 0, 320, 240)
       const imageData = canvas.toDataURL('image/jpeg', 0.5).split(',')[1]
       
-      const response = await fetch('/api/detect-frame', {
+      const response = await fetch(`${API_BASE}api/detect-frame`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageData, confThreshold: confidenceThreshold })
@@ -290,7 +292,7 @@ export default function PoseApp() {
     formData.append('video', file)
 
     try {
-      const uploadResponse = await fetch('/api/upload', {
+      const uploadResponse = await fetch(`${API_BASE}api/upload`, {
         method: 'POST',
         body: formData
       })
@@ -301,7 +303,7 @@ export default function PoseApp() {
       
       updateStatus('正在检测姿态...')
       
-      const processResponse = await fetch('/api/process-video', {
+      const processResponse = await fetch(`${API_BASE}api/process-video`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -356,7 +358,7 @@ export default function PoseApp() {
         labelData += '\n'
       }
       
-      const response = await fetch('/api/save-dataset', {
+      const response = await fetch(`${API_BASE}api/save-dataset`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageData, labelData, sampleIndex: sampleCount })
