@@ -28,6 +28,7 @@ export default function PoseApp() {
   const [currentStream, setCurrentStream] = useState(null)
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.3)
   const [samplingRate, setSamplingRate] = useState(0)
+  const [targetFps, setTargetFps] = useState(10)
   const [lastFrameData, setLastFrameData] = useState(null)
   const [detectionResults, setDetectionResults] = useState(null)
   const [processedVideoPath, setProcessedVideoPath] = useState(null)
@@ -111,7 +112,7 @@ export default function PoseApp() {
     if (!isCameraActive || !sourceVideoRef.current) return
     
     const now = Date.now()
-    if (now - lastDetectTime < 200) return
+    if (now - lastDetectTime < 1000 / Math.max(targetFps, 1)) return
     setLastDetectTime(now)
     
     try {
@@ -140,7 +141,7 @@ export default function PoseApp() {
       console.error('Frame detection error:', e)
       updateStatus(`检测服务准备中: ${e.message}`, true)
     }
-  }, [isCameraActive, confidenceThreshold, lastDetectTime, updateStatus])
+  }, [isCameraActive, confidenceThreshold, lastDetectTime, targetFps, updateStatus])
 
   const getPoseFromResults = useCallback((videoTime) => {
     if (!detectionResults || !processedVideoPath) return []
@@ -245,10 +246,10 @@ export default function PoseApp() {
       setKeypointCount(0)
     }
 
-    setFps(video.paused ? 0 : Math.round(30 / (skipFrames + 1)))
+    setFps(video.paused ? 0 : (isCameraActive ? targetFps : Math.round(30 / (skipFrames + 1))))
 
     animationFrameRef.current = requestAnimationFrame(processFrame)
-  }, [isDetecting, isCameraActive, frameCounter, samplingRate, confidenceThreshold, lastFrameData, lastVideoTime, detectFrameRealtime, getPoseFromResults])
+  }, [isDetecting, isCameraActive, frameCounter, samplingRate, confidenceThreshold, lastFrameData, lastVideoTime, targetFps, detectFrameRealtime, getPoseFromResults])
 
   const startDetection = useCallback(() => {
     if (!isCameraActive && !sourceVideoRef.current?.src) {
@@ -326,7 +327,7 @@ export default function PoseApp() {
         throw new Error(uploadResult.error)
       }
       
-      updateStatus('正在检测姿态（默认按约 1 FPS 抽帧）...')
+      updateStatus(`正在检测姿态（目标 ${targetFps} FPS 抽帧）...`)
       const requestId = `video-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
       progressTimer = window.setInterval(async () => {
         try {
@@ -347,7 +348,8 @@ export default function PoseApp() {
           requestId,
           videoPath: `/uploads/${uploadResult.filename}`,
           confThreshold: confidenceThreshold,
-          skipFrames: samplingRate > 0 ? samplingRate : -1
+          skipFrames: -1,
+          targetFps
         })
       })
       const processResult = await processResponse.json()
@@ -368,7 +370,7 @@ export default function PoseApp() {
     } finally {
       if (progressTimer) window.clearInterval(progressTimer)
     }
-  }, [confidenceThreshold, samplingRate, updateStatus])
+  }, [confidenceThreshold, targetFps, updateStatus])
 
   const saveDatasetSample = useCallback(async () => {
     if (!isCameraActive || !lastFrameData || lastFrameData.length === 0) {
@@ -516,18 +518,16 @@ export default function PoseApp() {
           <span style={styles.confidenceValue}>{confidenceThreshold.toFixed(2)}</span>
         </div>
         <div style={styles.sliderContainer}>
-          <label style={styles.sliderLabel}>帧采样间隔:</label>
+          <label style={styles.sliderLabel}>检测FPS:</label>
           <input
             type="range"
-            min="0"
-            max="9"
-            value={samplingRate}
-            onChange={(e) => setSamplingRate(parseInt(e.target.value))}
+            min="1"
+            max="30"
+            value={targetFps}
+            onChange={(e) => setTargetFps(parseInt(e.target.value))}
             style={styles.slider}
           />
-          <span style={styles.confidenceValue}>
-            {['全部', '每2帧', '每3帧', '每4帧', '每5帧', '每6帧', '每7帧', '每8帧', '每9帧', '每10帧'][samplingRate]}
-          </span>
+          <span style={styles.confidenceValue}>{targetFps} FPS</span>
         </div>
       </div>
     </div>

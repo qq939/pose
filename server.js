@@ -494,7 +494,7 @@ app.post('/api/upload', upload.single('video'), (req, res) => {
 
 // Process video with YOLO Pose
 app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' }), (req, res) => {
-  const { videoPath, confThreshold, skipFrames } = req.body;
+  const { videoPath, confThreshold, skipFrames, targetFps } = req.body;
   const requestId = sanitizeRequestId(req.body.requestId, 'video');
   
   if (!videoPath) {
@@ -509,12 +509,14 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
   }
   
   const videoStat = fs.statSync(fullPath);
-  log(`Processing video: ${videoPath} with conf=${confThreshold || 0.3}, skip=${skipFrames || 0}`);
+  log(`Processing video: ${videoPath} with conf=${confThreshold || 0.3}, skip=${skipFrames ?? -1}, targetFps=${targetFps ?? 10}`);
   
   const conf = confThreshold || 0.3;
   const requestedSkip = Number.isFinite(Number(skipFrames)) ? Number(skipFrames) : -1;
   const skip = requestedSkip > 0 ? Math.floor(requestedSkip) : -1;
-  const args = [pythonScript, 'video', fullPath, conf.toString(), skip.toString()];
+  const requestedTargetFps = Number.isFinite(Number(targetFps)) ? Number(targetFps) : 10;
+  const effectiveTargetFps = Math.max(0.1, Math.min(30, requestedTargetFps));
+  const args = [pythonScript, 'video', fullPath, conf.toString(), skip.toString(), effectiveTargetFps.toString()];
   debugLog('process-video', 'spawn python process', {
     requestId,
     videoPath,
@@ -523,7 +525,8 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
     conf,
     skip,
     requestedSkip,
-    sampling: skip < 0 ? 'auto target 1 fps' : `every ${skip + 1} frame(s)`,
+    targetFps: effectiveTargetFps,
+    sampling: skip < 0 ? `auto target ${effectiveTargetFps} fps` : `every ${skip + 1} frame(s)`,
     pythonBin,
     args
   });

@@ -227,6 +227,7 @@ def main():
         video_path = sys.argv[2]
         conf_threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.3
         skip_frames = int(sys.argv[4]) if len(sys.argv) > 4 else -1
+        target_fps = float(sys.argv[5]) if len(sys.argv) > 5 else 1.0
         
         if not Path(video_path).exists():
             print(json.dumps({"error": f"文件不存在: {video_path}"}))
@@ -243,9 +244,10 @@ def main():
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         auto_sample = skip_frames < 0
         if auto_sample:
-            skip_frames = max(int(round(fps or 1)) - 1, 0)
+            target_fps = max(target_fps, 0.1)
+            skip_frames = max(int(round((fps or target_fps) / target_fps)) - 1, 0)
         print(
-            f"Video opened path={video_path} frames={total_frames} fps={fps} size={frame_width}x{frame_height} conf={conf_threshold} skip={skip_frames} auto_sample={auto_sample}",
+            f"Video opened path={video_path} frames={total_frames} fps={fps} size={frame_width}x{frame_height} conf={conf_threshold} skip={skip_frames} auto_sample={auto_sample} target_fps={target_fps}",
             file=sys.stderr,
             flush=True
         )
@@ -293,7 +295,7 @@ def main():
             "input_fps": fps,
             "frame_width": frame_width,
             "frame_height": frame_height,
-            "sampling_rate": "target 1 fps" if auto_sample else (f"every {skip_frames + 1} frame(s)" if skip_frames > 0 else "all frames"),
+            "sampling_rate": f"target {target_fps:g} fps" if auto_sample else (f"every {skip_frames + 1} frame(s)" if skip_frames > 0 else "all frames"),
             "frames": frames_data
         }
         print(json.dumps(result))

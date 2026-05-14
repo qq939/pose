@@ -319,8 +319,8 @@
       </div>
       <div class="slider-container">
         <label>检测FPS:</label>
-        <input type="range" id="fpsLimitSlider" min="1" max="30" value="1">
-        <span class="confidence-value" id="fpsLimitValue">1 FPS</span>
+        <input type="range" id="fpsLimitSlider" min="1" max="30" value="10">
+        <span class="confidence-value" id="fpsLimitValue">10 FPS</span>
       </div>
     </div>
   </div>
@@ -351,7 +351,7 @@
     let animationFrameId = null;
     let currentStream = null;
     let confidenceThreshold = 0.3;
-    let fpsLimit = 1;
+    let fpsLimit = 10;
     let lastVideoTime = -1;
     let lastFrameData = null;
     let detectionResults = null;
@@ -875,7 +875,7 @@
           throw new Error(uploadResult.error);
         }
         
-        updateStatus('正在检测姿态（默认按约 1 FPS 抽帧）...');
+        updateStatus(`正在检测姿态（目标 ${fpsLimit} FPS 抽帧）...`);
         const requestId = `video-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
         progressTimer = setInterval(async () => {
           try {
@@ -896,7 +896,8 @@
             requestId,
             videoPath: `/uploads/${uploadResult.filename}`,
             confThreshold: confidenceThreshold,
-            skipFrames: -1
+            skipFrames: -1,
+            targetFps: fpsLimit
           })
         });
         const processResult = await processResponse.json();
