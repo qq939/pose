@@ -359,6 +359,7 @@
     let hasBufferedCameraFrame = false;
     let poseFrameWidth = 640;
     let poseFrameHeight = 480;
+    let cameraOutputCount = 0;
 
     // YOLO Pose Keypoints (17 points for COCO format)
     const KEYPOINT_NAMES = [
@@ -481,20 +482,10 @@
       });
     }
 
-    function processFrame() {
-      if (!isDetecting) return;
-
-      const currentTime = sourceVideo.currentTime;
+    function renderPoseFrame() {
       const { canvasDisplayWidth, canvasDisplayHeight, scaleX, scaleY } = getDisplayScale();
 
-      if (sourceVideo.readyState >= 2 && isCameraActive) {
-        // Camera mode only renders the throttled buffer as output.
-      } else if (sourceVideo.readyState >= 2 && currentTime !== lastVideoTime) {
-        lastVideoTime = currentTime;
-        lastFrameData = getPoseFromResults(currentTime);
-      }
-
-      if (lastFrameData) {
+      if (lastFrameData && lastFrameData.length > 0) {
         drawKeypoints(lastFrameData, canvasDisplayWidth, canvasDisplayHeight, scaleX, scaleY);
         document.getElementById('personCount').textContent = lastFrameData.length;
         document.getElementById('keypointCount').textContent =
@@ -506,12 +497,26 @@
       }
 
       document.getElementById('fpsDisplay').textContent = sourceVideo.paused ? '0' : `~${fpsLimit}`;
+    }
+
+    function processFrame() {
+      if (!isDetecting) return;
+
+      const currentTime = sourceVideo.currentTime;
+
+      if (sourceVideo.readyState >= 2 && isCameraActive) {
+        // Camera mode output is updated by the FPS-limited sampler.
+      } else if (sourceVideo.readyState >= 2 && currentTime !== lastVideoTime) {
+        lastVideoTime = currentTime;
+        lastFrameData = getPoseFromResults(currentTime);
+        renderPoseFrame();
+      }
 
       animationFrameId = requestAnimationFrame(processFrame);
     }
 
-    async function detectFrameRealtime() {
-      if (!isCameraActive || !stagingVideoCanvas || realtimeDetectionInFlight) return;
+    async function detectFrameRealtime(frameCanvas) {
+      if (!isCameraActive || !frameCanvas || realtimeDetectionInFlight) return false;
       realtimeDetectionInFlight = true;
       
       try {
@@ -519,7 +524,7 @@
         canvas.width = poseFrameWidth;
         canvas.height = poseFrameHeight;
         const tempCtx = canvas.getContext('2d');
-        tempCtx.drawImage(stagingVideoCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
+        tempCtx.drawImage(frameCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
         const imageData = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
         
         const response = await fetch('/api/detect-frame', {
@@ -534,13 +539,16 @@
           throw new Error((result.error || '检测服务暂不可用') + setupMessage);
         }
         if (result.success && result.persons) {
-          outputVideoCtx.drawImage(stagingVideoCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
+          outputVideoCtx.drawImage(frameCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
           hasBufferedCameraFrame = true;
           lastFrameData = result.persons;
+          renderPoseFrame();
         }
+        return true;
       } catch (e) {
         console.error('Frame detection error:', e);
         updateStatus(`检测服务准备中: ${e.message}`, true);
+        return false;
       } finally {
         realtimeDetectionInFlight = false;
       }
@@ -669,6 +677,9 @@
     let outputVideoCanvas = null;
     let outputVideoCtx = null;
     let limitedFrameTimerId = null;
+    let captureFrameAnimationId = null;
+    let cameraFramePool = [];
+    const CAMERA_FRAME_POOL_SIZE = 5;
 
     function getFrameIntervalMs() {
       return 1000 / Math.max(fpsLimit, 1);
@@ -686,33 +697,65 @@
       outputVideoCanvas.height = poseFrameHeight;
       outputVideoCtx = outputVideoCanvas.getContext('2d');
       hasBufferedCameraFrame = false;
+      cameraFramePool = [];
+      cameraOutputCount = 0;
 
-      const drawLimitedFrame = async () => {
+      const captureCameraFrame = () => {
         if (!isCameraActive) return;
 
         if (sourceVideo.readyState >= 2) {
-          // Only the newest frame at release time enters staging.
           stagingVideoCtx.drawImage(sourceVideo, 0, 0, poseFrameWidth, poseFrameHeight);
-
-          if (isDetecting) {
-            await detectFrameRealtime();
-          } else {
-            outputVideoCtx.drawImage(stagingVideoCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
-            hasBufferedCameraFrame = true;
+          const frameCanvas = document.createElement('canvas');
+          frameCanvas.width = poseFrameWidth;
+          frameCanvas.height = poseFrameHeight;
+          frameCanvas.getContext('2d').drawImage(stagingVideoCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
+          cameraFramePool.push(frameCanvas);
+          if (cameraFramePool.length > CAMERA_FRAME_POOL_SIZE) {
+            cameraFramePool.splice(0, cameraFramePool.length - CAMERA_FRAME_POOL_SIZE);
           }
         }
 
-        limitedFrameTimerId = window.setTimeout(drawLimitedFrame, getFrameIntervalMs());
+        captureFrameAnimationId = requestAnimationFrame(captureCameraFrame);
       };
-      
-      drawLimitedFrame();
+
+      const outputLatestFrame = () => {
+        if (!isCameraActive || !outputVideoCtx || cameraFramePool.length === 0) return;
+
+        const latestFrame = cameraFramePool[cameraFramePool.length - 1];
+        cameraFramePool = [];
+        outputVideoCtx.drawImage(latestFrame, 0, 0, poseFrameWidth, poseFrameHeight);
+        hasBufferedCameraFrame = true;
+        cameraOutputCount++;
+        window.__poseDebug = {
+          ...(window.__poseDebug || {}),
+          cameraOutputCount,
+          fpsLimit,
+          poolSize: cameraFramePool.length,
+          lastOutputAt: performance.now()
+        };
+
+        if (isDetecting) {
+          detectFrameRealtime(latestFrame);
+        } else {
+          renderPoseFrame();
+        }
+      };
+
+      captureCameraFrame();
+      outputLatestFrame();
+      limitedFrameTimerId = window.setInterval(outputLatestFrame, getFrameIntervalMs());
     }
 
     function stopLimitedVideoLoop() {
       if (limitedFrameTimerId) {
-        clearTimeout(limitedFrameTimerId);
+        clearInterval(limitedFrameTimerId);
         limitedFrameTimerId = null;
       }
+      if (captureFrameAnimationId) {
+        cancelAnimationFrame(captureFrameAnimationId);
+        captureFrameAnimationId = null;
+      }
+      cameraFramePool = [];
     }
 
     document.getElementById('stopCamera').addEventListener('click', () => {
@@ -725,6 +768,7 @@
       stagingVideoCtx = null;
       outputVideoCanvas = null;
       outputVideoCtx = null;
+      cameraOutputCount = 0;
       hasBufferedCameraFrame = false;
       sourceVideo.srcObject = null;
       sourceVideo.src = '';

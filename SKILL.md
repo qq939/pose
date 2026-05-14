@@ -94,6 +94,12 @@ SETUP_STATUS_FILE=logs/setup-status.json bash scripts/ensure_python_env.sh
 3. Python 视频处理只能在 stdout 输出最终 JSON；进度信息必须写 stderr，否则前端会解析失败
 4. 前端 canvas 在没有 keypoints 时也要绘制源视频帧，不能直接清空
 
+### 摄像头 FPS 限速
+1. `检测FPS` 默认 1 FPS，控制结果画布输出频率
+2. 浏览器原始摄像头仍由系统采集，前端用 `requestAnimationFrame` 采最新帧进缓存池
+3. 缓存池最多 5 张，超过后丢弃旧帧
+4. 定时器按 `1000 / fps` 毫秒取缓存池最新帧输出；检测请求也只基于这张输出帧发起
+
 ## 5. 开发指南
 
 ### 添加新 API 路由
