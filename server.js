@@ -10,6 +10,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const API_BASE = process.env.API_BASE || '';
 const STATIC_BASE = process.env.STATIC_BASE || '/yolo/';
 const SETUP_STATUS_FILE = process.env.SETUP_STATUS_FILE || path.join(__dirname, 'logs', 'setup-status.json');
+const PYTHON_READY_FILE = process.env.PYTHON_READY_FILE || path.join(__dirname, 'logs', 'python-ready.ok');
 
 // CORS configuration for known public domains.
 const CORS_ORIGINS = [
@@ -83,13 +84,24 @@ function makeRequestId(prefix) {
 }
 
 function getSetupStatus() {
-  const fallback = fs.existsSync(pythonBin)
+  const markerReady = fs.existsSync(pythonBin) && fs.existsSync(PYTHON_READY_FILE);
+  const fallback = markerReady
     ? { state: 'ready', step: 'ready', progress: 100, message: 'Python 环境已就绪' }
     : { state: 'installing', step: 'missing_venv', progress: 0, message: '正在准备 Python 环境' };
 
   try {
     if (!fs.existsSync(SETUP_STATUS_FILE)) return fallback;
-    return { ...fallback, ...JSON.parse(fs.readFileSync(SETUP_STATUS_FILE, 'utf8')) };
+    const status = { ...fallback, ...JSON.parse(fs.readFileSync(SETUP_STATUS_FILE, 'utf8')) };
+    if (status.state === 'ready' && !markerReady) {
+      return {
+        ...status,
+        state: 'installing',
+        step: 'verify',
+        progress: Math.min(status.progress || 90, 90),
+        message: '正在重新验证 Python 环境'
+      };
+    }
+    return status;
   } catch (error) {
     return { state: 'error', step: 'status_parse', progress: 0, message: `读取安装状态失败: ${error.message}` };
   }
@@ -97,7 +109,7 @@ function getSetupStatus() {
 
 function isPythonReady() {
   const status = getSetupStatus();
-  return status.state === 'ready' && fs.existsSync(pythonBin);
+  return status.state === 'ready' && fs.existsSync(pythonBin) && fs.existsSync(PYTHON_READY_FILE);
 }
 
 function setupPage(status) {
@@ -429,7 +441,8 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
   log(`Processing video: ${videoPath} with conf=${confThreshold || 0.3}, skip=${skipFrames || 0}`);
   
   const conf = confThreshold || 0.3;
-  const skip = skipFrames || 0;
+  const requestedSkip = Number.isFinite(Number(skipFrames)) ? Number(skipFrames) : -1;
+  const skip = requestedSkip > 0 ? Math.floor(requestedSkip) : -1;
   const args = [pythonScript, 'video', fullPath, conf.toString(), skip.toString()];
   debugLog('process-video', 'spawn python process', {
     requestId,
@@ -438,6 +451,8 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
     size: videoStat.size,
     conf,
     skip,
+    requestedSkip,
+    sampling: skip < 0 ? 'auto target 1 fps' : `every ${skip + 1} frame(s)`,
     pythonBin,
     args
   });

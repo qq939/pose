@@ -325,7 +325,7 @@ export default function PoseApp() {
         throw new Error(uploadResult.error)
       }
       
-      updateStatus('正在检测姿态...')
+      updateStatus('正在检测姿态（默认按约 1 FPS 抽帧）...')
       
       const processResponse = await fetch('/api/process-video', {
         method: 'POST',
@@ -333,7 +333,7 @@ export default function PoseApp() {
         body: JSON.stringify({
           videoPath: `/uploads/${uploadResult.filename}`,
           confThreshold: confidenceThreshold,
-          skipFrames: samplingRate
+          skipFrames: samplingRate > 0 ? samplingRate : -1
         })
       })
       const processResult = await processResponse.json()

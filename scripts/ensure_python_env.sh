@@ -4,6 +4,7 @@ set -u
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATUS_FILE="${SETUP_STATUS_FILE:-$PROJECT_DIR/logs/setup-status.json}"
 LOG_FILE="$PROJECT_DIR/logs/python-setup.log"
+READY_FILE="$PROJECT_DIR/logs/python-ready.ok"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV_DIR="$PROJECT_DIR/.venv"
 REQUIREMENTS_FILE="$PROJECT_DIR/requirements.txt"
@@ -27,6 +28,7 @@ log() {
 }
 
 write_status "installing" "prepare" 5 "正在检查 Python 运行环境"
+rm -f "$READY_FILE"
 log "Checking Python environment in $VENV_DIR"
 
 if [ ! -x "$VENV_DIR/bin/python" ]; then
@@ -52,6 +54,14 @@ if ! "$VENV_DIR/bin/python" -m pip install -r "$REQUIREMENTS_FILE" >> "$LOG_FILE
   exit 1
 fi
 
+write_status "installing" "install_headless_cv2" 75 "正在切换容器兼容的 OpenCV headless 版本"
+log "Ensuring headless OpenCV is used"
+"$VENV_DIR/bin/python" -m pip uninstall -y opencv-python opencv-contrib-python >> "$LOG_FILE" 2>&1 || true
+if ! "$VENV_DIR/bin/python" -m pip install --no-deps --force-reinstall opencv-python-headless >> "$LOG_FILE" 2>&1; then
+  write_status "error" "install_headless_cv2" 75 "安装 opencv-python-headless 失败，请查看 logs/python-setup.log"
+  exit 1
+fi
+
 write_status "installing" "verify" 90 "正在验证 cv2 / ultralytics / numpy"
 log "Verifying Python packages"
 if ! "$VENV_DIR/bin/python" - <<'PY' >> "$LOG_FILE" 2>&1
@@ -67,5 +77,6 @@ then
   exit 1
 fi
 
+date -u +"%Y-%m-%dT%H:%M:%SZ" > "$READY_FILE"
 write_status "ready" "ready" 100 "Python 环境已就绪"
 log "Python environment is ready"
