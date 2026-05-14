@@ -26,6 +26,27 @@ except ImportError:
     sys.exit(1)
 
 detector = None
+mp_hands_module = None
+
+SKELETON = [
+    (0, 1), (0, 2), (1, 3), (2, 4),
+    (5, 6),
+    (5, 7), (7, 9),
+    (6, 8), (8, 10),
+    (5, 11), (6, 12),
+    (11, 12),
+    (11, 13), (13, 15),
+    (12, 14), (14, 16)
+]
+
+HAND_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (0, 9), (9, 10), (10, 11), (11, 12),
+    (0, 13), (13, 14), (14, 15), (15, 16),
+    (0, 17), (17, 18), (18, 19), (19, 20),
+    (5, 9), (9, 13), (13, 17)
+]
 
 
 def get_detector():
@@ -87,6 +108,117 @@ def detect_frame(frame, conf_threshold=0.3):
                 persons.append({"keypoints": keypoints_list})
     
     return persons
+
+
+def get_hands_detector():
+    global mp_hands_module
+    if mp_hands_module is False:
+        return None
+    if mp_hands_module is None:
+        try:
+            import mediapipe as mp
+            mp_hands_module = mp.solutions.hands
+        except Exception as error:
+            print(f"MediaPipe Hands unavailable: {error}", file=sys.stderr, flush=True)
+            mp_hands_module = False
+            return None
+    return mp_hands_module
+
+
+def detect_hands(frame, hands_detector):
+    if hands_detector is None:
+        return []
+
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands_detector.process(rgb_frame)
+    if not results.multi_hand_landmarks:
+        return []
+
+    hands = []
+    h, w = frame.shape[:2]
+    handedness = results.multi_handedness or []
+    for index, hand_landmarks in enumerate(results.multi_hand_landmarks):
+        label = ""
+        score = 0.0
+        if index < len(handedness) and handedness[index].classification:
+            cls = handedness[index].classification[0]
+            label = cls.label
+            score = float(cls.score)
+
+        keypoints = []
+        for landmark in hand_landmarks.landmark:
+            keypoints.append({
+                "x": float(landmark.x * w),
+                "y": float(landmark.y * h),
+                "z": float(landmark.z),
+                "confidence": score
+            })
+        hands.append({"label": label, "confidence": score, "keypoints": keypoints})
+    return hands
+
+
+def draw_annotations(frame, persons, hands, conf_threshold=0.3):
+    annotated = frame.copy()
+
+    for person_idx, person in enumerate(persons):
+        keypoints = person.get("keypoints", [])
+        color = ((37 + person_idx * 53) % 255, (211 + person_idx * 47) % 255, (102 + person_idx * 31) % 255)
+        for a, b in SKELETON:
+            if a >= len(keypoints) or b >= len(keypoints):
+                continue
+            kp_a = keypoints[a]
+            kp_b = keypoints[b]
+            if kp_a["confidence"] > conf_threshold and kp_b["confidence"] > conf_threshold:
+                cv2.line(
+                    annotated,
+                    (int(kp_a["x"]), int(kp_a["y"])),
+                    (int(kp_b["x"]), int(kp_b["y"])),
+                    color,
+                    3
+                )
+        for kp in keypoints:
+            if kp["confidence"] > conf_threshold:
+                cv2.circle(annotated, (int(kp["x"]), int(kp["y"])), 5, color, -1)
+                cv2.circle(annotated, (int(kp["x"]), int(kp["y"])), 7, (255, 255, 255), 1)
+
+    for hand_idx, hand in enumerate(hands):
+        keypoints = hand.get("keypoints", [])
+        color = (255, 183, 3) if hand.get("label") == "Left" else (251, 86, 7)
+        for a, b in HAND_CONNECTIONS:
+            if a < len(keypoints) and b < len(keypoints):
+                cv2.line(
+                    annotated,
+                    (int(keypoints[a]["x"]), int(keypoints[a]["y"])),
+                    (int(keypoints[b]["x"]), int(keypoints[b]["y"])),
+                    color,
+                    2
+                )
+        for point_idx, kp in enumerate(keypoints):
+            cv2.circle(annotated, (int(kp["x"]), int(kp["y"])), 4, color, -1)
+            if point_idx in (0, 4, 8, 12, 16, 20):
+                cv2.putText(
+                    annotated,
+                    str(point_idx),
+                    (int(kp["x"]) + 4, int(kp["y"]) - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.35,
+                    (255, 255, 255),
+                    1,
+                    cv2.LINE_AA
+                )
+        if keypoints:
+            cv2.putText(
+                annotated,
+                f"{hand.get('label') or 'Hand'} {hand_idx + 1}",
+                (int(keypoints[0]["x"]) + 6, int(keypoints[0]["y"]) + 18),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                color,
+                2,
+                cv2.LINE_AA
+            )
+
+    return annotated
 
 
 def read_exactly(stream, size):
@@ -228,6 +360,7 @@ def main():
         conf_threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.3
         skip_frames = int(sys.argv[4]) if len(sys.argv) > 4 else -1
         target_fps = float(sys.argv[5]) if len(sys.argv) > 5 else 1.0
+        annotated_video_path = sys.argv[6] if len(sys.argv) > 6 else None
         
         if not Path(video_path).exists():
             print(json.dumps({"error": f"文件不存在: {video_path}"}))
@@ -251,6 +384,29 @@ def main():
             file=sys.stderr,
             flush=True
         )
+        writer = None
+        hands_detector = None
+        if annotated_video_path:
+            output_fps = fps or target_fps or 1.0
+            if skip_frames > 0:
+                output_fps = max(output_fps / (skip_frames + 1), 1.0)
+            if auto_sample:
+                output_fps = min(max(target_fps, 1.0), fps or target_fps or 1.0)
+            Path(annotated_video_path).parent.mkdir(parents=True, exist_ok=True)
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(annotated_video_path, fourcc, output_fps, (frame_width, frame_height))
+            if not writer.isOpened():
+                print(f"Failed to create annotated video: {annotated_video_path}", file=sys.stderr, flush=True)
+                writer = None
+            hands_module = get_hands_detector()
+            if hands_module:
+                hands_detector = hands_module.Hands(
+                    static_image_mode=False,
+                    max_num_hands=4,
+                    min_detection_confidence=0.35,
+                    min_tracking_confidence=0.35
+                )
+                print("MediaPipe Hands enabled for hand joints", file=sys.stderr, flush=True)
         frames_data = []
         frame_idx = 0
         output_idx = 0
@@ -263,16 +419,24 @@ def main():
             if skip_frames == 0 or frame_idx % (skip_frames + 1) == 0:
                 try:
                     persons = detect_frame(frame, conf_threshold)
+                    hands = detect_hands(frame, hands_detector) if hands_detector else []
                 except Exception:
                     print(f"Detection failed at frame={frame_idx}", file=sys.stderr, flush=True)
                     traceback.print_exc(file=sys.stderr)
+                    if hands_detector:
+                        hands_detector.close()
+                    if writer:
+                        writer.release()
                     cap.release()
                     sys.exit(1)
                 frames_data.append({
                     "frame": frame_idx,
                     "output_frame": output_idx,
-                    "persons": persons
+                    "persons": persons,
+                    "hands": hands
                 })
+                if writer:
+                    writer.write(draw_annotations(frame, persons, hands, conf_threshold))
                 output_idx += 1
                 if output_idx == 1 or output_idx % 10 == 0:
                     print(
@@ -287,6 +451,10 @@ def main():
                 print(f"Processed {frame_idx}/{total_frames} frames...", file=sys.stderr, flush=True)
         
         cap.release()
+        if hands_detector:
+            hands_detector.close()
+        if writer:
+            writer.release()
         
         result = {
             "success": True,
@@ -296,6 +464,7 @@ def main():
             "frame_width": frame_width,
             "frame_height": frame_height,
             "sampling_rate": f"target {target_fps:g} fps" if auto_sample else (f"every {skip_frames + 1} frame(s)" if skip_frames > 0 else "all frames"),
+            "annotated_video_path": annotated_video_path,
             "frames": frames_data
         }
         print(json.dumps(result))

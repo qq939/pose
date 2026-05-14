@@ -43,6 +43,7 @@ export default function PoseApp() {
   const [lastVideoTime, setLastVideoTime] = useState(-1)
   const [datasetStatus, setDatasetStatus] = useState('数据集: 0 样本')
   const [fileName, setFileName] = useState('')
+  const [downloadResult, setDownloadResult] = useState(null)
   
   const videoInputRef = useRef(null)
 
@@ -281,6 +282,7 @@ export default function PoseApp() {
       setLastFrameData(null)
       setDetectionResults(null)
       setProcessedVideoPath(null)
+      setDownloadResult(null)
       updateStatus(`已加载视频: ${file.name}`)
     }
   }, [updateStatus])
@@ -364,8 +366,16 @@ export default function PoseApp() {
       
       setDetectionResults(processResult)
       setProcessedVideoPath(`/uploads/${uploadResult.filename}`)
+      if (processResult.resultVideoPath || processResult.resultPath) {
+        setDownloadResult({
+          href: processResult.resultVideoPath || processResult.resultPath,
+          filename: processResult.resultVideoFilename || processResult.resultFilename || 'pose-result.mp4',
+          label: processResult.resultVideoPath ? '下载标注视频' : '下载检测结果'
+        })
+      }
       updateStatus(`检测完成: ${processResult.total_output_frames}/${processResult.total_input_frames} 帧 (${processResult.sampling_rate})`)
     } catch (err) {
+      setDownloadResult(null)
       updateStatus(`处理失败: ${err.message}`, true)
     } finally {
       if (progressTimer) window.clearInterval(progressTimer)
@@ -472,6 +482,15 @@ export default function PoseApp() {
         </div>
         <div style={styles.controls}>
           <button style={styles.btnPrimary} onClick={handleProcessVideo}>🎬 处理视频</button>
+          {downloadResult && (
+            <a
+              style={{ ...styles.btnSuccess, textDecoration: 'none' }}
+              href={downloadResult.href}
+              download={downloadResult.filename}
+            >
+              {downloadResult.label}
+            </a>
+          )}
         </div>
       </div>
 

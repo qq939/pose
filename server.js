@@ -516,7 +516,20 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
   const skip = requestedSkip > 0 ? Math.floor(requestedSkip) : -1;
   const requestedTargetFps = Number.isFinite(Number(targetFps)) ? Number(targetFps) : 10;
   const effectiveTargetFps = Math.max(0.1, Math.min(30, requestedTargetFps));
-  const args = [pythonScript, 'video', fullPath, conf.toString(), skip.toString(), effectiveTargetFps.toString()];
+  const sourceBaseName = path.parse(path.basename(fullPath)).name;
+  const resultFilename = `${sourceBaseName}-pose-${requestId}.json`;
+  const annotatedVideoFilename = `${sourceBaseName}-pose-${requestId}.mp4`;
+  const resultPath = path.join(resultsDir, resultFilename);
+  const annotatedVideoPath = path.join(resultsDir, annotatedVideoFilename);
+  const args = [
+    pythonScript,
+    'video',
+    fullPath,
+    conf.toString(),
+    skip.toString(),
+    effectiveTargetFps.toString(),
+    annotatedVideoPath
+  ];
   debugLog('process-video', 'spawn python process', {
     requestId,
     videoPath,
@@ -527,6 +540,7 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
     requestedSkip,
     targetFps: effectiveTargetFps,
     sampling: skip < 0 ? `auto target ${effectiveTargetFps} fps` : `every ${skip + 1} frame(s)`,
+    annotatedVideoPath,
     pythonBin,
     args
   });
@@ -634,14 +648,14 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
         debugLog('process-video', 'python returned error json', { requestId, result });
         return res.status(500).json({ error: result.error, debugId: requestId });
       }
-      const resultFilename = `${path.parse(path.basename(fullPath)).name}-pose-${requestId}.json`;
-      const resultPath = path.join(resultsDir, resultFilename);
       const resultWithDownloads = {
         ...result,
         debugId: requestId,
         sourceVideo: videoPath,
         resultFilename,
-        resultPath: `/results/${resultFilename}`
+        resultPath: `/results/${resultFilename}`,
+        resultVideoFilename: annotatedVideoFilename,
+        resultVideoPath: fs.existsSync(annotatedVideoPath) ? `/results/${annotatedVideoFilename}` : null
       };
       fs.writeFileSync(resultPath, JSON.stringify(resultWithDownloads, null, 2));
       log(`Video processed: ${result.total_output_frames}/${result.total_input_frames} frames`);
@@ -651,6 +665,7 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
         outputFrames: result.total_output_frames,
         totalInputFrames: result.total_input_frames,
         resultPath: `/results/${resultFilename}`,
+        resultVideoPath: resultWithDownloads.resultVideoPath,
         message: `检测完成: ${result.total_output_frames}/${result.total_input_frames} 帧`
       });
       debugLog('process-video', 'video processed successfully', {
@@ -658,7 +673,7 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
         totalInputFrames: result.total_input_frames,
         totalOutputFrames: result.total_output_frames,
         resultPath,
-        downloadUrl: `/results/${resultFilename}`
+        downloadUrl: resultWithDownloads.resultVideoPath || `/results/${resultFilename}`
       });
       res.json(resultWithDownloads);
     } catch (e) {

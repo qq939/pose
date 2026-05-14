@@ -278,7 +278,7 @@
       </div>
       <div class="controls">
         <button class="btn-primary" id="processVideo">🎬 处理视频</button>
-        <a class="btn-success" id="downloadPoseResult" href="#" download style="display: none; text-decoration: none;">下载检测结果</a>
+        <a class="btn-success" id="downloadPoseResult" href="#" download style="display: none; text-decoration: none;">下载标注视频</a>
       </div>
     </div>
 
@@ -913,9 +913,10 @@
         detectionResults = processResult;
         processedVideoPath = `/uploads/${uploadResult.filename}`;
         setPoseFrameSize(processResult.frame_width || sourceVideo.videoWidth || 640, processResult.frame_height || sourceVideo.videoHeight || 480);
-        if (processResult.resultPath) {
-          downloadPoseResult.href = processResult.resultPath;
-          downloadPoseResult.download = processResult.resultFilename || 'pose-result.json';
+        if (processResult.resultVideoPath || processResult.resultPath) {
+          downloadPoseResult.href = processResult.resultVideoPath || processResult.resultPath;
+          downloadPoseResult.download = processResult.resultVideoFilename || processResult.resultFilename || 'pose-result.mp4';
+          downloadPoseResult.textContent = processResult.resultVideoPath ? '下载标注视频' : '下载检测结果';
           downloadPoseResult.style.display = 'inline-block';
         }
         updateStatus(`检测完成: ${processResult.total_output_frames}/${processResult.total_input_frames} 帧 (${processResult.sampling_rate})`);

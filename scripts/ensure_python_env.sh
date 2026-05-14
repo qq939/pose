@@ -121,9 +121,19 @@ fi
 write_status "installing" "install_headless_cv2" 75 "正在切换容器兼容的 OpenCV headless 版本"
 log "Ensuring headless OpenCV is used"
 "$VENV_DIR/bin/python" -m pip uninstall -y opencv-python opencv-contrib-python >> "$LOG_FILE" 2>&1 || true
-if ! pip_retry "--no-deps --force-reinstall opencv-python-headless"; then
+if ! "$VENV_DIR/bin/python" -m pip install --force-reinstall "numpy<2" opencv-python-headless==4.11.0.86 >> "$LOG_FILE" 2>&1; then
   write_status "error" "install_headless_cv2" 75 "安装 opencv-python-headless 失败，请查看 logs/python-setup.log"
   exit 1
+fi
+
+write_status "installing" "install_hands" 82 "正在安装手关节检测依赖（可选）"
+log "Installing optional MediaPipe Hands"
+if pip_retry "mediapipe"; then
+  log "MediaPipe installed; restoring headless OpenCV"
+  "$VENV_DIR/bin/python" -m pip uninstall -y opencv-python opencv-contrib-python >> "$LOG_FILE" 2>&1 || true
+  "$VENV_DIR/bin/python" -m pip install --force-reinstall "numpy<2" opencv-python-headless==4.11.0.86 >> "$LOG_FILE" 2>&1 || true
+else
+  log "MediaPipe install failed; hand joints will be disabled but body pose remains available"
 fi
 
 write_status "installing" "verify" 90 "正在验证 cv2 / ultralytics / numpy"
@@ -135,6 +145,11 @@ import ultralytics
 print("cv2", cv2.__version__)
 print("numpy", numpy.__version__)
 print("ultralytics", ultralytics.__version__)
+try:
+    import mediapipe
+    print("mediapipe", mediapipe.__version__)
+except Exception as error:
+    print("mediapipe unavailable", error)
 PY
 then
   write_status "error" "verify" 90 "Python 依赖验证失败，请查看 logs/python-setup.log"
