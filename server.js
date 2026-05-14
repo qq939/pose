@@ -36,10 +36,12 @@ app.use((req, res, next) => {
 
 const uploadsDir = path.join(__dirname, 'uploads');
 const logsDir = path.join(__dirname, 'logs');
+const resultsDir = path.join(uploadsDir, 'results');
 const clientDistDir = path.join(__dirname, 'client', 'dist');
 const pythonScript = path.join(__dirname, 'pose_detector.py');
 const pythonBin = path.join(__dirname, '.venv', 'bin', 'python');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+if (!fs.existsSync(resultsDir)) fs.mkdirSync(resultsDir, { recursive: true });
 if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
 
 // Configure multer for video uploads
@@ -57,6 +59,27 @@ function log(message) {
   const logFile = path.join(logsDir, 'start.log');
   fs.appendFileSync(logFile, logMessage);
   console.log(logMessage.trim());
+}
+
+function debugLog(scope, message, meta = {}) {
+  const timestamp = new Date().toISOString();
+  const safeMeta = JSON.stringify(meta, (key, value) => {
+    if (typeof value === 'string' && value.length > 1200) {
+      return `${value.slice(0, 1200)}...<truncated ${value.length - 1200} chars>`;
+    }
+    return value;
+  });
+  const line = `[${timestamp}] [${scope}] ${message} ${safeMeta}\n`;
+  fs.appendFileSync(path.join(logsDir, 'run.log'), line);
+}
+
+function textTail(value, maxLength = 3000) {
+  if (!value) return '';
+  return value.length > maxLength ? value.slice(value.length - maxLength) : value;
+}
+
+function makeRequestId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
 function getSetupStatus() {
@@ -359,13 +382,26 @@ if (fs.existsSync(clientDistDir)) {
 // Always serve /uploads and /dataset
 app.use('/uploads', express.static(uploadsDir));
 app.use('/dataset', express.static(path.join(__dirname, 'dataset')));
+app.use('/results', express.static(resultsDir, {
+  setHeaders: (res, filePath) => {
+    res.setHeader('Content-Disposition', `attachment; filename="${path.basename(filePath)}"`);
+  }
+}));
 
 // Video upload endpoint
 app.post('/api/upload', upload.single('video'), (req, res) => {
   if (!req.file) {
+    debugLog('upload', 'missing video file');
     return res.status(400).json({ error: 'No video file uploaded' });
   }
   log(`Video uploaded: ${req.file.filename}`);
+  debugLog('upload', 'video uploaded', {
+    filename: req.file.filename,
+    originalname: req.file.originalname,
+    mimetype: req.file.mimetype,
+    size: req.file.size,
+    path: req.file.path
+  });
   res.json({
     success: true,
     filename: req.file.filename,
@@ -376,21 +412,36 @@ app.post('/api/upload', upload.single('video'), (req, res) => {
 // Process video with YOLO Pose
 app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' }), (req, res) => {
   const { videoPath, confThreshold, skipFrames } = req.body;
+  const requestId = makeRequestId('video');
   
   if (!videoPath) {
+    debugLog('process-video', 'missing videoPath', { requestId, body: req.body });
     return res.status(400).json({ error: 'videoPath is required' });
   }
   
   const fullPath = path.join(__dirname, videoPath);
   if (!fs.existsSync(fullPath)) {
+    debugLog('process-video', 'video file not found', { requestId, videoPath, fullPath });
     return res.status(400).json({ error: 'Video file not found' });
   }
   
+  const videoStat = fs.statSync(fullPath);
   log(`Processing video: ${videoPath} with conf=${confThreshold || 0.3}, skip=${skipFrames || 0}`);
   
   const conf = confThreshold || 0.3;
   const skip = skipFrames || 0;
   const args = [pythonScript, 'video', fullPath, conf.toString(), skip.toString()];
+  debugLog('process-video', 'spawn python process', {
+    requestId,
+    videoPath,
+    fullPath,
+    size: videoStat.size,
+    conf,
+    skip,
+    pythonBin,
+    args
+  });
+  const startedAt = Date.now();
   const pythonProcess = spawn(pythonBin, args);
   
   let output = '';
@@ -399,33 +450,87 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
   
   pythonProcess.stdout.on('data', (data) => {
     output += data.toString();
+    debugLog('process-video', 'python stdout chunk', {
+      requestId,
+      bytes: data.length,
+      outputLength: output.length
+    });
   });
   
   pythonProcess.stderr.on('data', (data) => {
     errorOutput += data.toString();
     log(`Python process: ${data.toString().trim()}`);
+    debugLog('process-video', 'python stderr chunk', {
+      requestId,
+      bytes: data.length,
+      stderrTail: textTail(errorOutput, 1200)
+    });
   });
 
   pythonProcess.on('error', (error) => {
     responded = true;
     log(`Python process spawn error: ${error.message}`);
-    res.status(500).json({ error: error.message || 'Failed to start Python process' });
+    debugLog('process-video', 'python spawn error', {
+      requestId,
+      message: error.message,
+      stack: error.stack
+    });
+    res.status(500).json({ error: error.message || 'Failed to start Python process', debugId: requestId });
   });
   
-  pythonProcess.on('close', (code) => {
+  pythonProcess.on('close', (code, signal) => {
     if (responded) return;
+    const durationMs = Date.now() - startedAt;
+    debugLog('process-video', 'python process closed', {
+      requestId,
+      code,
+      signal,
+      durationMs,
+      stdoutLength: output.length,
+      stderrLength: errorOutput.length,
+      stdoutTail: textTail(output),
+      stderrTail: textTail(errorOutput)
+    });
     if (code !== 0) {
-      log(`Python process error: ${errorOutput}`);
-      return res.status(500).json({ error: errorOutput || 'Processing failed' });
+      const errorMessage = textTail(errorOutput) || `Python exited with code ${code}${signal ? ` signal ${signal}` : ''}`;
+      log(`Python process error: ${errorMessage}`);
+      return res.status(500).json({ error: errorMessage || 'Processing failed', debugId: requestId });
     }
     
     try {
       const result = parsePythonJsonOutput(output);
+      if (result.error) {
+        debugLog('process-video', 'python returned error json', { requestId, result });
+        return res.status(500).json({ error: result.error, debugId: requestId });
+      }
+      const resultFilename = `${path.parse(path.basename(fullPath)).name}-pose-${requestId}.json`;
+      const resultPath = path.join(resultsDir, resultFilename);
+      const resultWithDownloads = {
+        ...result,
+        debugId: requestId,
+        sourceVideo: videoPath,
+        resultFilename,
+        resultPath: `/results/${resultFilename}`
+      };
+      fs.writeFileSync(resultPath, JSON.stringify(resultWithDownloads, null, 2));
       log(`Video processed: ${result.total_output_frames}/${result.total_input_frames} frames`);
-      res.json(result);
+      debugLog('process-video', 'video processed successfully', {
+        requestId,
+        totalInputFrames: result.total_input_frames,
+        totalOutputFrames: result.total_output_frames,
+        resultPath,
+        downloadUrl: `/results/${resultFilename}`
+      });
+      res.json(resultWithDownloads);
     } catch (e) {
       log(`JSON parse error: ${output}`);
-      res.status(500).json({ error: 'Failed to parse detection result' });
+      debugLog('process-video', 'failed to parse python output', {
+        requestId,
+        message: e.message,
+        stdoutTail: textTail(output),
+        stderrTail: textTail(errorOutput)
+      });
+      res.status(500).json({ error: `Failed to parse detection result: ${e.message}`, debugId: requestId });
     }
   });
 });

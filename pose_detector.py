@@ -10,6 +10,7 @@ import sys
 import json
 import base64
 import struct
+import traceback
 from pathlib import Path
 
 try:
@@ -232,10 +233,19 @@ def main():
             sys.exit(1)
         
         cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"Failed to open video: {video_path}", file=sys.stderr, flush=True)
+            print(json.dumps({"error": f"无法打开视频文件: {video_path}"}))
+            sys.exit(2)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(
+            f"Video opened path={video_path} frames={total_frames} fps={fps} size={frame_width}x{frame_height} conf={conf_threshold} skip={skip_frames}",
+            file=sys.stderr,
+            flush=True
+        )
         frames_data = []
         frame_idx = 0
         output_idx = 0
@@ -246,7 +256,13 @@ def main():
                 break
             
             if skip_frames == 0 or frame_idx % (skip_frames + 1) == 0:
-                persons = detect_frame(frame, conf_threshold)
+                try:
+                    persons = detect_frame(frame, conf_threshold)
+                except Exception:
+                    print(f"Detection failed at frame={frame_idx}", file=sys.stderr, flush=True)
+                    traceback.print_exc(file=sys.stderr)
+                    cap.release()
+                    sys.exit(1)
                 frames_data.append({
                     "frame": frame_idx,
                     "output_frame": output_idx,

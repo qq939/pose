@@ -47,6 +47,8 @@ tail -f logs/run.log      # 运行日志
 tail -f logs/python-setup.log # Python venv 安装日志
 ```
 
+视频处理失败时优先看 `logs/run.log` 中 `[process-video]` 行。每次处理都有 `requestId/debugId`，会记录 Python 启动参数、视频大小、退出码、stderr/stdout 尾部和结果文件路径。
+
 ### Git 操作
 ```bash
 git add .
@@ -93,6 +95,12 @@ SETUP_STATUS_FILE=logs/setup-status.json bash scripts/ensure_python_env.sh
 2. 再看 `logs/python-setup.log` 和 `logs/run.log`
 3. Python 视频处理只能在 stdout 输出最终 JSON；进度信息必须写 stderr，否则前端会解析失败
 4. 前端 canvas 在没有 keypoints 时也要绘制源视频帧，不能直接清空
+
+### 视频 Pose 结果下载
+1. `/api/process-video` 成功后会在 `uploads/results/` 写入 JSON
+2. 响应中包含 `resultPath` 和 `resultFilename`
+3. 前端会显示“下载检测结果”按钮
+4. `/results/<file>.json` 以附件方式下载
 
 ### 摄像头 FPS 限速
 1. `检测FPS` 默认 1 FPS，控制结果画布输出频率

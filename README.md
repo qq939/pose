@@ -12,6 +12,7 @@
 - 支持拖拽或点击上传视频文件
 - 支持 MP4、AVI、MOV 等常见格式
 - 上传后自动处理并显示检测结果
+- 视频 Pose 检测结果会保存为 JSON，可在页面点击下载
 
 ### 2. 实时摄像头检测
 - 一键开启摄像头
@@ -153,6 +154,8 @@ tail -f logs/python-setup.log
 | run.log | 应用运行日志，记录请求和运行时信息 | logs/run.log |
 | python-setup.log | Python venv 安装与验证日志 | logs/python-setup.log |
 | agent_tui.log | Claude Agent 会话日志，记录与主人的对话 | logs/agent_tui.log |
+
+`logs/run.log` 会记录视频处理 debug 信息，包括上传文件大小、Python 参数、退出码、stderr/stdout 摘要、结果下载路径和 `debugId`。
 
 ### 日志文件内容整理
 

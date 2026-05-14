@@ -278,6 +278,7 @@
       </div>
       <div class="controls">
         <button class="btn-primary" id="processVideo">🎬 处理视频</button>
+        <a class="btn-success" id="downloadPoseResult" href="#" download style="display: none; text-decoration: none;">下载检测结果</a>
       </div>
     </div>
 
@@ -336,6 +337,7 @@
     const videoInput = document.getElementById('videoInput');
     const uploadArea = document.getElementById('uploadArea');
     const fileNameDiv = document.getElementById('fileName');
+    const downloadPoseResult = document.getElementById('downloadPoseResult');
 
     sourceVideo.addEventListener('loadedmetadata', () => {
       if (!isCameraActive) {
@@ -843,6 +845,8 @@
         lastFrameData = null;
         detectionResults = null;
         processedVideoPath = null;
+        downloadPoseResult.style.display = 'none';
+        downloadPoseResult.removeAttribute('href');
         updateStatus(`已加载视频: ${file.name}`);
       }
     }
@@ -894,8 +898,15 @@
         detectionResults = processResult;
         processedVideoPath = `/uploads/${uploadResult.filename}`;
         setPoseFrameSize(processResult.frame_width || sourceVideo.videoWidth || 640, processResult.frame_height || sourceVideo.videoHeight || 480);
+        if (processResult.resultPath) {
+          downloadPoseResult.href = processResult.resultPath;
+          downloadPoseResult.download = processResult.resultFilename || 'pose-result.json';
+          downloadPoseResult.style.display = 'inline-block';
+        }
         updateStatus(`检测完成: ${processResult.total_output_frames}/${processResult.total_input_frames} 帧 (${processResult.sampling_rate})`);
       } catch (err) {
+        downloadPoseResult.style.display = 'none';
+        downloadPoseResult.removeAttribute('href');
         updateStatus(`处理失败: ${err.message}`, true);
       }
 
