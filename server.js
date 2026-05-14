@@ -83,6 +83,67 @@ function makeRequestId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
+function sanitizeRequestId(value, fallbackPrefix = 'video') {
+  if (typeof value !== 'string') return makeRequestId(fallbackPrefix);
+  const cleaned = value.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+  return cleaned || makeRequestId(fallbackPrefix);
+}
+
+const videoProgress = new Map();
+const VIDEO_PROCESS_TIMEOUT_MS = Number(process.env.VIDEO_PROCESS_TIMEOUT_MS || 10 * 60 * 1000);
+
+function setVideoProgress(requestId, patch) {
+  const previous = videoProgress.get(requestId) || {};
+  const next = {
+    requestId,
+    state: 'processing',
+    progress: 0,
+    message: '正在准备视频处理',
+    ...previous,
+    ...patch,
+    startedAt: previous.startedAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  videoProgress.set(requestId, next);
+  return next;
+}
+
+function parseVideoProgress(requestId, chunkText) {
+  const opened = chunkText.match(/frames=(\d+).*?fps=([0-9.]+).*?skip=(-?\d+)/);
+  if (opened) {
+    const totalInputFrames = Number(opened[1]);
+    const inputFps = Number(opened[2]);
+    const skip = Number(opened[3]);
+    const sampleEvery = Math.max(skip + 1, 1);
+    const estimatedOutputFrames = Math.max(Math.ceil(totalInputFrames / sampleEvery), 1);
+    setVideoProgress(requestId, {
+      totalInputFrames,
+      inputFps,
+      skip,
+      estimatedOutputFrames,
+      progress: 2,
+      message: `视频已打开，预计处理 ${estimatedOutputFrames} 个采样帧`
+    });
+  }
+
+  const detected = [...chunkText.matchAll(/Detected output_frames=(\d+) input_frame=(\d+)\/(\d+)/g)].pop();
+  if (detected) {
+    const outputFrames = Number(detected[1]);
+    const inputFrame = Number(detected[2]);
+    const totalInputFrames = Number(detected[3]);
+    const current = videoProgress.get(requestId) || {};
+    const estimatedOutputFrames = current.estimatedOutputFrames || outputFrames || 1;
+    const progress = Math.max(2, Math.min(98, Math.round((outputFrames / estimatedOutputFrames) * 100)));
+    setVideoProgress(requestId, {
+      outputFrames,
+      inputFrame,
+      totalInputFrames,
+      progress,
+      message: `已处理 ${outputFrames}/${estimatedOutputFrames} 个采样帧`
+    });
+  }
+}
+
 function getSetupStatus() {
   const markerReady = fs.existsSync(pythonBin) && fs.existsSync(PYTHON_READY_FILE);
   const fallback = markerReady
@@ -371,6 +432,16 @@ app.get('/api/setup-status', (req, res) => {
   res.json(getSetupStatus());
 });
 
+app.get('/api/process-progress/:requestId', (req, res) => {
+  const requestId = sanitizeRequestId(req.params.requestId);
+  res.json(videoProgress.get(requestId) || {
+    requestId,
+    state: 'unknown',
+    progress: 0,
+    message: '暂未收到处理进度'
+  });
+});
+
 // Serve static files only after setup routes are registered.
 if (fs.existsSync(clientDistDir)) {
   app.use(STATIC_BASE, (req, res, next) => {
@@ -424,7 +495,7 @@ app.post('/api/upload', upload.single('video'), (req, res) => {
 // Process video with YOLO Pose
 app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' }), (req, res) => {
   const { videoPath, confThreshold, skipFrames } = req.body;
-  const requestId = makeRequestId('video');
+  const requestId = sanitizeRequestId(req.body.requestId, 'video');
   
   if (!videoPath) {
     debugLog('process-video', 'missing videoPath', { requestId, body: req.body });
@@ -458,10 +529,33 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
   });
   const startedAt = Date.now();
   const pythonProcess = spawn(pythonBin, args);
+  setVideoProgress(requestId, {
+    state: 'processing',
+    progress: 1,
+    message: 'Python 检测进程已启动',
+    videoPath,
+    timeoutMs: VIDEO_PROCESS_TIMEOUT_MS
+  });
   
   let output = '';
   let errorOutput = '';
   let responded = false;
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    setVideoProgress(requestId, {
+      state: 'timeout',
+      progress: 100,
+      message: '处理超过 10 分钟，已停止'
+    });
+    debugLog('process-video', 'python process timeout', { requestId, timeoutMs: VIDEO_PROCESS_TIMEOUT_MS });
+    pythonProcess.kill('SIGTERM');
+    setTimeout(() => {
+      if (pythonProcess.exitCode === null && pythonProcess.signalCode === null) {
+        pythonProcess.kill('SIGKILL');
+      }
+    }, 3000);
+  }, VIDEO_PROCESS_TIMEOUT_MS);
   
   pythonProcess.stdout.on('data', (data) => {
     output += data.toString();
@@ -473,8 +567,10 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
   });
   
   pythonProcess.stderr.on('data', (data) => {
-    errorOutput += data.toString();
-    log(`Python process: ${data.toString().trim()}`);
+    const chunkText = data.toString();
+    errorOutput += chunkText;
+    log(`Python process: ${chunkText.trim()}`);
+    parseVideoProgress(requestId, chunkText);
     debugLog('process-video', 'python stderr chunk', {
       requestId,
       bytes: data.length,
@@ -484,6 +580,12 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
 
   pythonProcess.on('error', (error) => {
     responded = true;
+    clearTimeout(timeout);
+    setVideoProgress(requestId, {
+      state: 'error',
+      progress: 100,
+      message: error.message || 'Python 进程启动失败'
+    });
     log(`Python process spawn error: ${error.message}`);
     debugLog('process-video', 'python spawn error', {
       requestId,
@@ -495,6 +597,7 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
   
   pythonProcess.on('close', (code, signal) => {
     if (responded) return;
+    clearTimeout(timeout);
     const durationMs = Date.now() - startedAt;
     debugLog('process-video', 'python process closed', {
       requestId,
@@ -506,9 +609,19 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
       stdoutTail: textTail(output),
       stderrTail: textTail(errorOutput)
     });
+    if (timedOut) {
+      const errorMessage = `视频处理超时，已超过 ${Math.round(VIDEO_PROCESS_TIMEOUT_MS / 60000)} 分钟`;
+      log(`Python process timeout: ${errorMessage}`);
+      return res.status(504).json({ error: errorMessage, debugId: requestId });
+    }
     if (code !== 0) {
       const errorMessage = textTail(errorOutput) || `Python exited with code ${code}${signal ? ` signal ${signal}` : ''}`;
       log(`Python process error: ${errorMessage}`);
+      setVideoProgress(requestId, {
+        state: 'error',
+        progress: 100,
+        message: errorMessage || '处理失败'
+      });
       return res.status(500).json({ error: errorMessage || 'Processing failed', debugId: requestId });
     }
     
@@ -529,6 +642,14 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
       };
       fs.writeFileSync(resultPath, JSON.stringify(resultWithDownloads, null, 2));
       log(`Video processed: ${result.total_output_frames}/${result.total_input_frames} frames`);
+      setVideoProgress(requestId, {
+        state: 'done',
+        progress: 100,
+        outputFrames: result.total_output_frames,
+        totalInputFrames: result.total_input_frames,
+        resultPath: `/results/${resultFilename}`,
+        message: `检测完成: ${result.total_output_frames}/${result.total_input_frames} 帧`
+      });
       debugLog('process-video', 'video processed successfully', {
         requestId,
         totalInputFrames: result.total_input_frames,
@@ -539,6 +660,11 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
       res.json(resultWithDownloads);
     } catch (e) {
       log(`JSON parse error: ${output}`);
+      setVideoProgress(requestId, {
+        state: 'error',
+        progress: 100,
+        message: `解析检测结果失败: ${e.message}`
+      });
       debugLog('process-video', 'failed to parse python output', {
         requestId,
         message: e.message,

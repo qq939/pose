@@ -863,6 +863,7 @@
 
       const formData = new FormData();
       formData.append('video', file);
+      let progressTimer = null;
 
       try {
         const response = await fetch('/api/upload', {
@@ -875,11 +876,24 @@
         }
         
         updateStatus('正在检测姿态（默认按约 1 FPS 抽帧）...');
+        const requestId = `video-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+        progressTimer = setInterval(async () => {
+          try {
+            const progressResponse = await fetch(`/api/process-progress/${requestId}`, { cache: 'no-store' });
+            const progress = await progressResponse.json();
+            if (progress.state !== 'unknown') {
+              updateStatus(`${progress.message || '正在检测姿态'} (${progress.progress || 0}%)`);
+            }
+          } catch (progressError) {
+            console.warn('读取处理进度失败', progressError);
+          }
+        }, 1000);
         
         const processResponse = await fetch('/api/process-video', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            requestId,
             videoPath: `/uploads/${uploadResult.filename}`,
             confThreshold: confidenceThreshold,
             skipFrames: -1
@@ -910,6 +924,7 @@
         updateStatus(`处理失败: ${err.message}`, true);
       }
 
+      if (progressTimer) clearInterval(progressTimer);
       loader.style.display = 'none';
     });
 

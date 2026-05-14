@@ -314,6 +314,7 @@ export default function PoseApp() {
     updateStatus('上传视频中...')
     const formData = new FormData()
     formData.append('video', file)
+    let progressTimer = null
 
     try {
       const uploadResponse = await fetch('/api/upload', {
@@ -326,11 +327,24 @@ export default function PoseApp() {
       }
       
       updateStatus('正在检测姿态（默认按约 1 FPS 抽帧）...')
+      const requestId = `video-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+      progressTimer = window.setInterval(async () => {
+        try {
+          const progressResponse = await fetch(`/api/process-progress/${requestId}`, { cache: 'no-store' })
+          const progress = await progressResponse.json()
+          if (progress.state !== 'unknown') {
+            updateStatus(`${progress.message || '正在检测姿态'} (${progress.progress || 0}%)`)
+          }
+        } catch (progressError) {
+          console.warn('读取处理进度失败', progressError)
+        }
+      }, 1000)
       
       const processResponse = await fetch('/api/process-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          requestId,
           videoPath: `/uploads/${uploadResult.filename}`,
           confThreshold: confidenceThreshold,
           skipFrames: samplingRate > 0 ? samplingRate : -1
@@ -351,6 +365,8 @@ export default function PoseApp() {
       updateStatus(`检测完成: ${processResult.total_output_frames}/${processResult.total_input_frames} 帧 (${processResult.sampling_rate})`)
     } catch (err) {
       updateStatus(`处理失败: ${err.message}`, true)
+    } finally {
+      if (progressTimer) window.clearInterval(progressTimer)
     }
   }, [confidenceThreshold, samplingRate, updateStatus])
 
