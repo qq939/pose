@@ -538,16 +538,22 @@
           const setupMessage = result.setup?.message ? ` (${result.setup.message})` : '';
           throw new Error((result.error || '检测服务暂不可用') + setupMessage);
         }
-        if (result.success && result.persons) {
+        if (!result.success) {
+          throw new Error(result.error || '检测失败');
+        }
+        if (Array.isArray(result.persons)) {
           outputVideoCtx.drawImage(frameCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
           hasBufferedCameraFrame = true;
           lastFrameData = result.persons;
           renderPoseFrame();
+          if (isDetecting) {
+            updateStatus('检测中...');
+          }
         }
         return true;
       } catch (e) {
         console.error('Frame detection error:', e);
-        updateStatus(`检测服务准备中: ${e.message}`, true);
+        updateStatus(`检测服务异常: ${e.message}`, true);
         return false;
       } finally {
         realtimeDetectionInFlight = false;
