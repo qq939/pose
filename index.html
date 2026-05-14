@@ -354,6 +354,7 @@
     let fpsLimit = 10;
     let lastVideoTime = -1;
     let lastFrameData = null;
+    let lastHandsData = [];
     let detectionResults = null;
     let processedVideoPath = null;
     let sampleCount = 0;
@@ -391,6 +392,24 @@
       return bestFrame?.persons || [];
     }
 
+    function getHandsFromResults(videoTime) {
+      if (!detectionResults || !processedVideoPath) return [];
+
+      const frameRate = detectionResults.input_fps || 30;
+      const currentFrameIdx = Math.floor(videoTime * frameRate);
+
+      let bestFrame = null;
+      for (const f of detectionResults.frames) {
+        if (f.frame <= currentFrameIdx) {
+          if (!bestFrame || f.frame > bestFrame.frame) bestFrame = f;
+        } else {
+          break;
+        }
+      }
+
+      return bestFrame?.hands || [];
+    }
+
     // Skeleton connections
     const SKELETON = [
       [0, 1], [0, 2], [1, 3], [2, 4],  // head
@@ -402,6 +421,16 @@
       [11, 13], [13, 15],              // left leg
       [12, 14], [14, 16]               // right leg
     ];
+
+    const HAND_CONNECTIONS = [
+      [0, 1], [1, 2], [2, 3], [3, 4],
+      [0, 5], [5, 6], [6, 7], [7, 8],
+      [0, 9], [9, 10], [10, 11], [11, 12],
+      [0, 13], [13, 14], [14, 15], [15, 16],
+      [0, 17], [17, 18], [18, 19], [19, 20],
+      [5, 9], [9, 13], [13, 17]
+    ];
+    const HAND_TIPS = { 4: 'T', 8: 'I', 12: 'M', 16: 'R', 20: 'P' };
 
     function setPoseFrameSize(width, height) {
       poseFrameWidth = width || 640;
@@ -440,7 +469,60 @@
       }
     }
 
-    function drawKeypoints(persons, canvasWidth, canvasHeight, scaleX, scaleY) {
+    function drawHands(hands, scaleX, scaleY) {
+      (hands || []).forEach((hand, idx) => {
+        const keypoints = hand.keypoints || [];
+        const color = hand.label === 'Left' ? '#ffb703' : '#fb5607';
+
+        HAND_CONNECTIONS.forEach(([a, b]) => {
+          if (keypoints[a] && keypoints[b]) {
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+            ctx.lineWidth = 6;
+            ctx.moveTo(keypoints[a].x * scaleX, keypoints[a].y * scaleY);
+            ctx.lineTo(keypoints[b].x * scaleX, keypoints[b].y * scaleY);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.moveTo(keypoints[a].x * scaleX, keypoints[a].y * scaleY);
+            ctx.lineTo(keypoints[b].x * scaleX, keypoints[b].y * scaleY);
+            ctx.stroke();
+          }
+        });
+
+        keypoints.forEach((kp, pointIdx) => {
+          const x = kp.x * scaleX;
+          const y = kp.y * scaleY;
+          ctx.beginPath();
+          ctx.arc(x, y, 7, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(x, y, 5, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.fill();
+          ctx.strokeStyle = 'white';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          if (HAND_TIPS[pointIdx]) {
+            ctx.fillStyle = 'white';
+            ctx.font = '12px Arial';
+            ctx.fillText(HAND_TIPS[pointIdx], x + 7, y - 7);
+          }
+        });
+
+        if (keypoints[0]) {
+          ctx.fillStyle = color;
+          ctx.font = '14px Arial';
+          ctx.fillText(`${hand.label || 'Hand'} ${idx + 1}${hand.estimated ? ' est' : ''}`, keypoints[0].x * scaleX + 8, keypoints[0].y * scaleY + 18);
+        }
+      });
+    }
+
+    function drawKeypoints(persons, hands, canvasWidth, canvasHeight, scaleX, scaleY) {
       drawCurrentFrame(canvasWidth, canvasHeight);
 
       persons.forEach((person, idx) => {
@@ -482,16 +564,20 @@
           }
         });
       });
+      drawHands(hands, scaleX, scaleY);
     }
 
     function renderPoseFrame() {
       const { canvasDisplayWidth, canvasDisplayHeight, scaleX, scaleY } = getDisplayScale();
 
-      if (lastFrameData && lastFrameData.length > 0) {
-        drawKeypoints(lastFrameData, canvasDisplayWidth, canvasDisplayHeight, scaleX, scaleY);
-        document.getElementById('personCount').textContent = lastFrameData.length;
+      if ((lastFrameData && lastFrameData.length > 0) || (lastHandsData && lastHandsData.length > 0)) {
+        const persons = lastFrameData || [];
+        const hands = lastHandsData || [];
+        drawKeypoints(persons, hands, canvasDisplayWidth, canvasDisplayHeight, scaleX, scaleY);
+        document.getElementById('personCount').textContent = persons.length;
         document.getElementById('keypointCount').textContent =
-          lastFrameData.reduce((sum, p) => sum + p.keypoints.length, 0);
+          persons.reduce((sum, p) => sum + p.keypoints.length, 0) +
+          hands.reduce((sum, h) => sum + (h.keypoints?.length || 0), 0);
       } else {
         drawCurrentFrame(canvasDisplayWidth, canvasDisplayHeight);
         document.getElementById('personCount').textContent = '0';
@@ -511,6 +597,7 @@
       } else if (sourceVideo.readyState >= 2 && currentTime !== lastVideoTime) {
         lastVideoTime = currentTime;
         lastFrameData = getPoseFromResults(currentTime);
+        lastHandsData = getHandsFromResults(currentTime);
         renderPoseFrame();
       }
 
@@ -547,6 +634,7 @@
           outputVideoCtx.drawImage(frameCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
           hasBufferedCameraFrame = true;
           lastFrameData = result.persons;
+          lastHandsData = Array.isArray(result.hands) ? result.hands : [];
           renderPoseFrame();
           if (isDetecting) {
             updateStatus('检测中...');
@@ -843,6 +931,7 @@
         hasBufferedCameraFrame = false;
         lastVideoTime = -1;
         lastFrameData = null;
+        lastHandsData = [];
         detectionResults = null;
         processedVideoPath = null;
         downloadPoseResult.style.display = 'none';

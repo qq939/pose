@@ -20,6 +20,17 @@ const SKELETON = [
   [12, 14], [14, 16]
 ]
 
+const HAND_CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [0, 9], [9, 10], [10, 11], [11, 12],
+  [0, 13], [13, 14], [14, 15], [15, 16],
+  [0, 17], [17, 18], [18, 19], [19, 20],
+  [5, 9], [9, 13], [13, 17]
+]
+
+const HAND_TIPS = { 4: 'T', 8: 'I', 12: 'M', 16: 'R', 20: 'P' }
+
 export default function PoseApp() {
   const sourceVideoRef = useRef(null)
   const resultCanvasRef = useRef(null)
@@ -32,6 +43,7 @@ export default function PoseApp() {
   const [samplingRate, setSamplingRate] = useState(0)
   const [targetFps, setTargetFps] = useState(10)
   const [lastFrameData, setLastFrameData] = useState(null)
+  const [lastHandsData, setLastHandsData] = useState([])
   const [detectionResults, setDetectionResults] = useState(null)
   const [processedVideoPath, setProcessedVideoPath] = useState(null)
   const [sampleCount, setSampleCount] = useState(0)
@@ -120,11 +132,14 @@ export default function PoseApp() {
     
     try {
       const canvas = document.createElement('canvas')
-      canvas.width = 320
-      canvas.height = 240
+      const sourceWidth = sourceVideoRef.current.videoWidth || 640
+      const sourceHeight = sourceVideoRef.current.videoHeight || 480
+      const scale = Math.min(1, 960 / Math.max(sourceWidth, sourceHeight))
+      canvas.width = Math.max(320, Math.round(sourceWidth * scale))
+      canvas.height = Math.max(240, Math.round(sourceHeight * scale))
       const tempCtx = canvas.getContext('2d')
-      tempCtx.drawImage(sourceVideoRef.current, 0, 0, 320, 240)
-      const imageData = canvas.toDataURL('image/jpeg', 0.5).split(',')[1]
+      tempCtx.drawImage(sourceVideoRef.current, 0, 0, canvas.width, canvas.height)
+      const imageData = canvas.toDataURL('image/jpeg', 0.75).split(',')[1]
       
       const response = await fetch(`${API_BASE}api/detect-frame`, {
         method: 'POST',
@@ -138,7 +153,21 @@ export default function PoseApp() {
         throw new Error((result.error || '检测服务暂不可用') + setupMessage)
       }
       if (result.success && result.persons) {
-        setLastFrameData(result.persons)
+        const toVideoX = sourceWidth / canvas.width
+        const toVideoY = sourceHeight / canvas.height
+        const scaleKeypoints = (keypoints = []) => keypoints.map((kp) => ({
+          ...kp,
+          x: kp.x * toVideoX,
+          y: kp.y * toVideoY
+        }))
+        setLastFrameData(result.persons.map((person) => ({
+          ...person,
+          keypoints: scaleKeypoints(person.keypoints)
+        })))
+        setLastHandsData(Array.isArray(result.hands) ? result.hands.map((hand) => ({
+          ...hand,
+          keypoints: scaleKeypoints(hand.keypoints)
+        })) : [])
       }
     } catch (e) {
       console.error('Frame detection error:', e)
@@ -164,6 +193,26 @@ export default function PoseApp() {
     }
     
     return bestFrame?.persons || []
+  }, [detectionResults, processedVideoPath])
+
+  const getHandsFromResults = useCallback((videoTime) => {
+    if (!detectionResults || !processedVideoPath) return []
+
+    const frameRate = detectionResults.input_fps || 30
+    const currentFrameIdx = Math.floor(videoTime * frameRate)
+
+    let bestFrame = null
+    for (const f of detectionResults.frames) {
+      if (f.frame <= currentFrameIdx) {
+        if (!bestFrame || f.frame > bestFrame.frame) {
+          bestFrame = f
+        }
+      } else {
+        break
+      }
+    }
+
+    return bestFrame?.hands || []
   }, [detectionResults, processedVideoPath])
 
   const processFrame = useCallback(() => {
@@ -198,6 +247,7 @@ export default function PoseApp() {
         if (currentTime !== lastVideoTime && shouldProcess) {
           setLastVideoTime(currentTime)
           setLastFrameData(getPoseFromResults(currentTime))
+          setLastHandsData(getHandsFromResults(currentTime))
         }
       }
     }
@@ -207,12 +257,68 @@ export default function PoseApp() {
       ctx.drawImage(video, 0, 0, canvasDisplayWidth, canvasDisplayHeight)
     }
 
-    if (lastFrameData) {
+    const drawHands = (hands, scaleX, scaleY) => {
+      ;(hands || []).forEach((hand, idx) => {
+        const keypoints = hand.keypoints || []
+        const color = hand.label === 'Left' ? '#ffb703' : '#fb5607'
+
+        HAND_CONNECTIONS.forEach(([a, b]) => {
+          if (keypoints[a] && keypoints[b]) {
+            ctx.beginPath()
+            ctx.strokeStyle = 'rgba(0,0,0,0.85)'
+            ctx.lineWidth = 6
+            ctx.moveTo(keypoints[a].x * scaleX, keypoints[a].y * scaleY)
+            ctx.lineTo(keypoints[b].x * scaleX, keypoints[b].y * scaleY)
+            ctx.stroke()
+
+            ctx.beginPath()
+            ctx.strokeStyle = color
+            ctx.lineWidth = 3
+            ctx.moveTo(keypoints[a].x * scaleX, keypoints[a].y * scaleY)
+            ctx.lineTo(keypoints[b].x * scaleX, keypoints[b].y * scaleY)
+            ctx.stroke()
+          }
+        })
+
+        keypoints.forEach((kp, pointIdx) => {
+          const x = kp.x * scaleX
+          const y = kp.y * scaleY
+          ctx.beginPath()
+          ctx.arc(x, y, 7, 0, Math.PI * 2)
+          ctx.fillStyle = 'rgba(0,0,0,0.9)'
+          ctx.fill()
+          ctx.beginPath()
+          ctx.arc(x, y, 5, 0, Math.PI * 2)
+          ctx.fillStyle = color
+          ctx.fill()
+          ctx.strokeStyle = 'white'
+          ctx.lineWidth = 1.5
+          ctx.stroke()
+
+          if (HAND_TIPS[pointIdx]) {
+            ctx.fillStyle = 'white'
+            ctx.font = '12px Arial'
+            ctx.fillText(HAND_TIPS[pointIdx], x + 7, y - 7)
+          }
+        })
+
+        if (keypoints[0]) {
+          ctx.fillStyle = color
+          ctx.font = '14px Arial'
+          ctx.fillText(`${hand.label || 'Hand'} ${idx + 1}${hand.estimated ? ' est' : ''}`, keypoints[0].x * scaleX + 8, keypoints[0].y * scaleY + 18)
+        }
+      })
+    }
+
+    if ((lastFrameData && lastFrameData.length > 0) || (lastHandsData && lastHandsData.length > 0)) {
       
       const scaleX = canvasDisplayWidth / videoWidth
       const scaleY = canvasDisplayHeight / videoHeight
 
-      lastFrameData.forEach((person, idx) => {
+      const persons = lastFrameData || []
+      const hands = lastHandsData || []
+
+      persons.forEach((person, idx) => {
         const hue = (idx * 60) % 360
 
         SKELETON.forEach(([a, b]) => {
@@ -242,8 +348,13 @@ export default function PoseApp() {
         })
       })
 
-      setPersonCount(lastFrameData.length)
-      setKeypointCount(lastFrameData.reduce((sum, p) => sum + p.keypoints.length, 0))
+      drawHands(hands, scaleX, scaleY)
+
+      setPersonCount(persons.length)
+      setKeypointCount(
+        persons.reduce((sum, p) => sum + p.keypoints.length, 0) +
+        hands.reduce((sum, h) => sum + (h.keypoints?.length || 0), 0)
+      )
     } else {
       setPersonCount(0)
       setKeypointCount(0)
@@ -252,7 +363,7 @@ export default function PoseApp() {
     setFps(video.paused ? 0 : (isCameraActive ? targetFps : Math.round(30 / (skipFrames + 1))))
 
     animationFrameRef.current = requestAnimationFrame(processFrame)
-  }, [isDetecting, isCameraActive, frameCounter, samplingRate, confidenceThreshold, lastFrameData, lastVideoTime, targetFps, detectFrameRealtime, getPoseFromResults])
+  }, [isDetecting, isCameraActive, frameCounter, samplingRate, confidenceThreshold, lastFrameData, lastHandsData, lastVideoTime, targetFps, detectFrameRealtime, getPoseFromResults, getHandsFromResults])
 
   const startDetection = useCallback(() => {
     if (!isCameraActive && !sourceVideoRef.current?.src) {
@@ -282,6 +393,7 @@ export default function PoseApp() {
       setIsCameraActive(false)
       setLastVideoTime(-1)
       setLastFrameData(null)
+      setLastHandsData([])
       setDetectionResults(null)
       setProcessedVideoPath(null)
       setDownloadResult(null)

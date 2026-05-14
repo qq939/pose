@@ -48,6 +48,14 @@ HAND_CONNECTIONS = [
     (5, 9), (9, 13), (13, 17)
 ]
 
+HAND_TIPS = {
+    4: "T",
+    8: "I",
+    12: "M",
+    16: "R",
+    20: "P"
+}
+
 
 def get_detector():
     """
@@ -157,6 +165,98 @@ def detect_hands(frame, hands_detector):
     return hands
 
 
+def estimate_missing_hand_joints(persons, detected_hands, conf_threshold=0.3):
+    estimated = []
+    existing_wrists = []
+    for hand in detected_hands:
+        keypoints = hand.get("keypoints", [])
+        if keypoints:
+            existing_wrists.append(np.array([keypoints[0]["x"], keypoints[0]["y"]], dtype=np.float32))
+
+    for person_idx, person in enumerate(persons):
+        keypoints = person.get("keypoints", [])
+        for label, wrist_idx, elbow_idx, direction_sign in (("Left", 9, 7, -1), ("Right", 10, 8, 1)):
+            if wrist_idx >= len(keypoints):
+                continue
+            wrist = keypoints[wrist_idx]
+            if wrist.get("confidence", 0) <= conf_threshold:
+                continue
+
+            wrist_xy = np.array([wrist["x"], wrist["y"]], dtype=np.float32)
+            if any(np.linalg.norm(wrist_xy - existing) < 90 for existing in existing_wrists):
+                continue
+
+            if elbow_idx < len(keypoints) and keypoints[elbow_idx].get("confidence", 0) > conf_threshold:
+                elbow = keypoints[elbow_idx]
+                forward = wrist_xy - np.array([elbow["x"], elbow["y"]], dtype=np.float32)
+            else:
+                forward = np.array([0, -1], dtype=np.float32)
+            norm = np.linalg.norm(forward)
+            if norm < 1:
+                forward = np.array([0, -1], dtype=np.float32)
+            else:
+                forward = forward / norm
+
+            side = np.array([-forward[1], forward[0]], dtype=np.float32) * direction_sign
+            body_scale = 70.0
+            if len(keypoints) > 6:
+                left_shoulder = keypoints[5]
+                right_shoulder = keypoints[6]
+                if left_shoulder.get("confidence", 0) > conf_threshold and right_shoulder.get("confidence", 0) > conf_threshold:
+                    body_scale = max(
+                        np.linalg.norm(
+                            np.array([left_shoulder["x"], left_shoulder["y"]], dtype=np.float32) -
+                            np.array([right_shoulder["x"], right_shoulder["y"]], dtype=np.float32)
+                        ) * 0.32,
+                        38.0
+                    )
+
+            hand_points = [{"x": float(wrist_xy[0]), "y": float(wrist_xy[1]), "z": 0.0, "confidence": wrist["confidence"]}]
+            finger_bases = [
+                (-0.48, 0.62, [0.42, 0.36, 0.30, 0.25]),
+                (-0.22, 0.92, [0.38, 0.32, 0.28, 0.23]),
+                (0.00, 1.00, [0.42, 0.36, 0.31, 0.25]),
+                (0.22, 0.90, [0.39, 0.33, 0.28, 0.23]),
+                (0.44, 0.72, [0.34, 0.28, 0.24, 0.20])
+            ]
+            for spread, reach, segments in finger_bases:
+                base = wrist_xy + side * (spread * body_scale) + forward * (0.16 * body_scale)
+                finger_dir = forward * reach + side * (spread * 0.22)
+                finger_dir = finger_dir / max(np.linalg.norm(finger_dir), 1.0)
+                current = base
+                for length in segments:
+                    current = current + finger_dir * (length * body_scale)
+                    hand_points.append({
+                        "x": float(current[0]),
+                        "y": float(current[1]),
+                        "z": 0.0,
+                        "confidence": wrist["confidence"]
+                    })
+
+            estimated.append({
+                "label": label,
+                "confidence": wrist["confidence"],
+                "estimated": True,
+                "person_index": person_idx,
+                "keypoints": hand_points
+            })
+
+    return detected_hands + estimated
+
+
+def create_hands_detector(static_image_mode=False):
+    hands_module = get_hands_detector()
+    if not hands_module:
+        return None
+    return hands_module.Hands(
+        static_image_mode=static_image_mode,
+        max_num_hands=4,
+        model_complexity=1,
+        min_detection_confidence=0.25,
+        min_tracking_confidence=0.25
+    )
+
+
 def draw_annotations(frame, persons, hands, conf_threshold=0.3):
     annotated = frame.copy()
 
@@ -186,22 +286,29 @@ def draw_annotations(frame, persons, hands, conf_threshold=0.3):
         color = (255, 183, 3) if hand.get("label") == "Left" else (251, 86, 7)
         for a, b in HAND_CONNECTIONS:
             if a < len(keypoints) and b < len(keypoints):
+                pt_a = (int(keypoints[a]["x"]), int(keypoints[a]["y"]))
+                pt_b = (int(keypoints[b]["x"]), int(keypoints[b]["y"]))
+                cv2.line(annotated, pt_a, pt_b, (0, 0, 0), 5)
                 cv2.line(
                     annotated,
-                    (int(keypoints[a]["x"]), int(keypoints[a]["y"])),
-                    (int(keypoints[b]["x"]), int(keypoints[b]["y"])),
+                    pt_a,
+                    pt_b,
                     color,
-                    2
+                    3
                 )
         for point_idx, kp in enumerate(keypoints):
-            cv2.circle(annotated, (int(kp["x"]), int(kp["y"])), 4, color, -1)
-            if point_idx in (0, 4, 8, 12, 16, 20):
+            point = (int(kp["x"]), int(kp["y"]))
+            cv2.circle(annotated, point, 7, (0, 0, 0), -1)
+            cv2.circle(annotated, point, 5, color, -1)
+            cv2.circle(annotated, point, 7, (255, 255, 255), 1)
+            label = HAND_TIPS.get(point_idx)
+            if label:
                 cv2.putText(
                     annotated,
-                    str(point_idx),
+                    label,
                     (int(kp["x"]) + 4, int(kp["y"]) - 4),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.35,
+                    0.45,
                     (255, 255, 255),
                     1,
                     cv2.LINE_AA
@@ -209,7 +316,7 @@ def draw_annotations(frame, persons, hands, conf_threshold=0.3):
         if keypoints:
             cv2.putText(
                 annotated,
-                f"{hand.get('label') or 'Hand'} {hand_idx + 1}",
+                f"{hand.get('label') or 'Hand'} {hand_idx + 1}{' est' if hand.get('estimated') else ''}",
                 (int(keypoints[0]["x"]) + 6, int(keypoints[0]["y"]) + 18),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.55,
@@ -234,6 +341,9 @@ def read_exactly(stream, size):
 def stream_loop(initial_conf=0.3):
     output = sys.stdout.buffer
     input_stream = sys.stdin.buffer
+    hands_detector = create_hands_detector(static_image_mode=False)
+    if hands_detector:
+        print("MediaPipe Hands enabled for realtime stream", file=sys.stderr, flush=True)
 
     while True:
         try:
@@ -256,7 +366,10 @@ def stream_loop(initial_conf=0.3):
                 nparr = np.frombuffer(image_bytes, np.uint8)
                 frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                 if frame is not None:
-                    result = {"success": True, "persons": detect_frame(frame, conf)}
+                    persons = detect_frame(frame, conf)
+                    hands = detect_hands(frame, hands_detector) if hands_detector else []
+                    hands = estimate_missing_hand_joints(persons, hands, conf)
+                    result = {"success": True, "persons": persons, "hands": hands}
                 else:
                     result = {"success": False, "error": "Failed to decode frame"}
             else:
@@ -269,6 +382,9 @@ def stream_loop(initial_conf=0.3):
         output.write(struct.pack(">I", len(response)))
         output.write(response)
         output.flush()
+
+    if hands_detector:
+        hands_detector.close()
 
 
 def save_sample(frame, persons, images_dir, labels_dir, sample_idx):
@@ -329,8 +445,13 @@ def main():
         
         conf = float(sys.argv[2]) if len(sys.argv) > 2 else 0.3
         persons = detect_frame(frame, conf)
+        hands_detector = create_hands_detector(static_image_mode=True)
+        hands = detect_hands(frame, hands_detector) if hands_detector else []
+        hands = estimate_missing_hand_joints(persons, hands, conf)
+        if hands_detector:
+            hands_detector.close()
         
-        result = {"success": True, "persons": persons}
+        result = {"success": True, "persons": persons, "hands": hands}
         print(json.dumps(result))
     
     elif mode == "video":
@@ -398,14 +519,8 @@ def main():
             if not writer.isOpened():
                 print(f"Failed to create annotated video: {annotated_video_path}", file=sys.stderr, flush=True)
                 writer = None
-            hands_module = get_hands_detector()
-            if hands_module:
-                hands_detector = hands_module.Hands(
-                    static_image_mode=False,
-                    max_num_hands=4,
-                    min_detection_confidence=0.35,
-                    min_tracking_confidence=0.35
-                )
+            hands_detector = create_hands_detector(static_image_mode=False)
+            if hands_detector:
                 print("MediaPipe Hands enabled for hand joints", file=sys.stderr, flush=True)
         frames_data = []
         frame_idx = 0
@@ -420,6 +535,7 @@ def main():
                 try:
                     persons = detect_frame(frame, conf_threshold)
                     hands = detect_hands(frame, hands_detector) if hands_detector else []
+                    hands = estimate_missing_hand_joints(persons, hands, conf_threshold)
                 except Exception:
                     print(f"Detection failed at frame={frame_idx}", file=sys.stderr, flush=True)
                     traceback.print_exc(file=sys.stderr)
@@ -440,7 +556,7 @@ def main():
                 output_idx += 1
                 if output_idx == 1 or output_idx % 10 == 0:
                     print(
-                        f"Detected output_frames={output_idx} input_frame={frame_idx}/{total_frames}",
+                        f"Detected output_frames={output_idx} input_frame={frame_idx}/{total_frames} persons={len(persons)} hands={len(hands)}",
                         file=sys.stderr,
                         flush=True
                     )
