@@ -30,6 +30,7 @@ kill $(cat logs/start.log | grep PID | awk '{print $NF}')
 ### 检查运行状态
 ```bash
 curl http://localhost:8082/api/status
+curl http://localhost:8082/api/setup-status
 ```
 
 ## 3. 常用命令
@@ -43,6 +44,7 @@ npm install
 ```bash
 tail -f logs/start.log    # 启动日志
 tail -f logs/run.log      # 运行日志
+tail -f logs/python-setup.log # Python venv 安装日志
 ```
 
 ### Git 操作
@@ -71,6 +73,26 @@ rm -rf uploads/*
 rm -rf node_modules
 npm install
 ```
+
+### 重建 Python venv
+```bash
+rm -rf .venv
+SETUP_STATUS_FILE=logs/setup-status.json bash scripts/ensure_python_env.sh
+```
+
+注意：`.venv/` 已在 `.gitignore` 中，提交前必须用 `git status --short` 确认虚拟环境没有进入暂存区。
+
+### 手机端打不开或摄像头不可用
+1. 确认 8082 服务：`curl http://localhost:8082/api/status`
+2. 确认 Python 环境：`curl http://localhost:8082/api/setup-status`
+3. 手机摄像头必须通过 HTTPS 或 localhost 使用
+4. 视频元素必须保留 `playsinline`、`webkit-playsinline`、`autoplay`、`muted` 和显式 `video.play()` 逻辑
+
+### YOLO Pose 检测结果黑屏
+1. 先看 `/api/setup-status` 是否为 `ready`
+2. 再看 `logs/python-setup.log` 和 `logs/run.log`
+3. Python 视频处理只能在 stdout 输出最终 JSON；进度信息必须写 stderr，否则前端会解析失败
+4. 前端 canvas 在没有 keypoints 时也要绘制源视频帧，不能直接清空
 
 ## 5. 开发指南
 
@@ -122,5 +144,7 @@ npm install @supabase/supabase-js @supabase/ssr
 | 启动脚本 | /home/agent/.claude/workspace/project/user_start.sh |
 | 服务器 | /home/agent/.claude/workspace/project/server.js |
 | 前端页面 | /home/agent/.claude/workspace/project/index.html |
+| Python 依赖 | /home/agent/.claude/workspace/project/requirements.txt |
+| venv 安装脚本 | /home/agent/.claude/workspace/project/scripts/ensure_python_env.sh |
 | 启动日志 | /home/agent/.claude/workspace/project/logs/start.log |
 | 容器规范 | /home/agent/.claude/workspace/project/systemreadme.md |

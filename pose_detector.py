@@ -5,13 +5,18 @@ YOLO Pose 检测器 - 用大白话说就是：
 2. 用 YOLO 模型找出图片里人的17个关键点 (鼻子、眼睛、手、脚这些)
 3. 把结果存起来或者画出来给人看
 """
-import cv2
 import numpy as np
 import sys
 import json
 import base64
 import struct
 from pathlib import Path
+
+try:
+    import cv2
+except ImportError:
+    print(json.dumps({"error": "请先安装 opencv-python-headless: pip install opencv-python-headless"}))
+    sys.exit(1)
 
 try:
     from ultralytics import YOLO
@@ -223,6 +228,8 @@ def main():
         cap = cv2.VideoCapture(video_path)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         frames_data = []
         frame_idx = 0
         output_idx = 0
@@ -243,8 +250,8 @@ def main():
             
             frame_idx += 1
             
-            if frame_idx % (60*fps) == 0:
-                print(f"Processed {frame_idx}/{total_frames} frames...", flush=True)
+            if fps and frame_idx > 0 and frame_idx % int(60 * fps) == 0:
+                print(f"Processed {frame_idx}/{total_frames} frames...", file=sys.stderr, flush=True)
         
         cap.release()
         
@@ -253,8 +260,8 @@ def main():
             "total_input_frames": total_frames,
             "total_output_frames": len(frames_data),
             "input_fps": fps,
-            "frame_width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-            "frame_height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            "frame_width": frame_width,
+            "frame_height": frame_height,
             "sampling_rate": f"every {skip_frames + 1} frame(s)" if skip_frames > 0 else "all frames",
             "frames": frames_data
         }

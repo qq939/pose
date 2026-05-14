@@ -201,6 +201,56 @@
       font-weight: bold;
       color: #00cc88;
     }
+    @media (max-width: 640px) {
+      body {
+        padding: 10px;
+      }
+      h1 {
+        font-size: 24px;
+        margin-bottom: 18px;
+      }
+      .panel {
+        padding: 14px;
+        border-radius: 10px;
+      }
+      .controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      button {
+        width: 100%;
+        min-height: 44px;
+        padding: 10px 12px;
+        font-size: 14px;
+      }
+      .upload-area {
+        padding: 24px 14px;
+      }
+      .video-container,
+      .info {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+      .video-wrapper,
+      .info-item {
+        min-width: 0;
+        max-width: none;
+      }
+      .slider-container {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .slider-container label {
+        min-width: 0;
+      }
+      .slider-container input[type="range"] {
+        max-width: none;
+        width: 100%;
+      }
+    }
   </style>
 </head>
 <body>
@@ -235,7 +285,7 @@
       <div class="video-container">
         <div class="video-wrapper">
           <label>📺 摄像头 / 视频源</label>
-          <video id="sourceVideo" playsinline controls></video>
+          <video id="sourceVideo" playsinline webkit-playsinline autoplay muted controls></video>
         </div>
         <div class="video-wrapper">
           <label>✨ YOLO Pose 检测结果</label>
@@ -377,7 +427,7 @@
 
     setPoseFrameSize(poseFrameWidth, poseFrameHeight);
 
-    function drawKeypoints(persons, canvasWidth, canvasHeight, scaleX, scaleY) {
+    function drawCurrentFrame(canvasWidth, canvasHeight) {
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
       if (outputVideoCanvas && hasBufferedCameraFrame) {
@@ -385,6 +435,10 @@
       } else if (sourceVideo.readyState > 0 && sourceVideo.videoWidth > 0) {
         ctx.drawImage(sourceVideo, 0, 0, canvasWidth, canvasHeight);
       }
+    }
+
+    function drawKeypoints(persons, canvasWidth, canvasHeight, scaleX, scaleY) {
+      drawCurrentFrame(canvasWidth, canvasHeight);
 
       persons.forEach((person, idx) => {
         const hue = (idx * 60) % 360;
@@ -446,7 +500,9 @@
         document.getElementById('keypointCount').textContent =
           lastFrameData.reduce((sum, p) => sum + p.keypoints.length, 0);
       } else {
-        ctx.clearRect(0, 0, canvasDisplayWidth, canvasDisplayHeight);
+        drawCurrentFrame(canvasDisplayWidth, canvasDisplayHeight);
+        document.getElementById('personCount').textContent = '0';
+        document.getElementById('keypointCount').textContent = '0';
       }
 
       document.getElementById('fpsDisplay').textContent = sourceVideo.paused ? '0' : `~${fpsLimit}`;
@@ -473,6 +529,10 @@
         });
         
         const result = await response.json();
+        if (!response.ok) {
+          const setupMessage = result.setup?.message ? ` (${result.setup.message})` : '';
+          throw new Error((result.error || '检测服务暂不可用') + setupMessage);
+        }
         if (result.success && result.persons) {
           outputVideoCtx.drawImage(stagingVideoCanvas, 0, 0, poseFrameWidth, poseFrameHeight);
           hasBufferedCameraFrame = true;
@@ -480,6 +540,7 @@
         }
       } catch (e) {
         console.error('Frame detection error:', e);
+        updateStatus(`检测服务准备中: ${e.message}`, true);
       } finally {
         realtimeDetectionInFlight = false;
       }
@@ -549,21 +610,41 @@
       statusDiv.className = isError ? 'error' : 'status';
     }
 
+    async function playSourceVideo() {
+      try {
+        await sourceVideo.play();
+      } catch (error) {
+        throw new Error(`视频播放失败: ${error.message}`);
+      }
+    }
+
     // Event Handlers
     document.getElementById('startCamera').addEventListener('click', async () => {
       try {
         updateStatus('正在开启摄像头...');
 
+        if (!window.isSecureContext) {
+          throw new Error('手机摄像头需要 HTTPS，请使用 https://sadsad.fun 访问');
+        }
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           throw new Error('浏览器不支持摄像头访问');
         }
 
         currentStream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480 }
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: 'user'
+          },
+          audio: false
         });
         isCameraActive = true;
         sourceVideo.srcObject = currentStream;
+        sourceVideo.muted = true;
+        sourceVideo.setAttribute('playsinline', '');
+        sourceVideo.setAttribute('webkit-playsinline', '');
         setPoseFrameSize(640, 480);
+        await playSourceVideo();
         
         startLimitedVideoLoop();
         updateStatus('摄像头已开启');
@@ -704,6 +785,7 @@
         const url = URL.createObjectURL(file);
         sourceVideo.src = url;
         sourceVideo.muted = false;
+        sourceVideo.removeAttribute('autoplay');
         sourceVideo.srcObject = null;
         isCameraActive = false;
         hasBufferedCameraFrame = false;
@@ -751,6 +833,10 @@
         });
         const processResult = await processResponse.json();
         
+        if (!processResponse.ok) {
+          const setupMessage = processResult.setup?.message ? ` (${processResult.setup.message})` : '';
+          throw new Error((processResult.error || '检测服务暂不可用') + setupMessage);
+        }
         if (processResult.error) {
           throw new Error(processResult.error);
         }

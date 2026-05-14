@@ -20,6 +20,11 @@ build/
 *.egg
 
 # Local
+logs/
+node_modules/
+uploads/
+dataset/
+client/dist/
 sessions/
 .env
 .env.local

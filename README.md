@@ -86,6 +86,20 @@ node server.js
 nohup node server.js > logs/start.log 2>&1 &
 ```
 
+### Docker 启动行为
+
+`user_start.sh` 会先启动 8082 Web 服务，再在后台检查和安装 Python venv。这样即使 `ultralytics` / `opencv-python-headless` 还在安装，用户访问 8082 也会看到安装进度页，而不是连接失败。
+
+安装状态接口：
+```bash
+curl http://localhost:8082/api/setup-status
+```
+
+安装日志：
+```bash
+tail -f logs/python-setup.log
+```
+
 ## API 接口
 
 ### GET /api/status
@@ -123,8 +137,10 @@ nohup node server.js > logs/start.log 2>&1 &
 
 1. 当前版本为模拟检测演示版本
 2. 如需生产使用，建议集成 ONNX Runtime Web 或 TensorFlow.js
-3. 摄像头需要 HTTPS 或 localhost 环境才能正常使用
+3. 手机摄像头需要 HTTPS 或 localhost 环境才能正常使用
 4. 视频文件大小限制: 500MB
+5. Python venv 位于 `.venv/`，已被 `.gitignore` 排除，禁止提交虚拟环境
+6. YOLO Pose 检测结果黑屏通常来自检测服务未就绪或 canvas 没有绘制源视频帧；当前版本会在无检测结果时继续绘制原视频帧
 
 ## 日志文件说明
 
@@ -132,6 +148,7 @@ nohup node server.js > logs/start.log 2>&1 &
 |---------|------|------|
 | start.log | 应用启动日志，记录服务启动和关闭事件 | logs/start.log |
 | run.log | 应用运行日志，记录请求和运行时信息 | logs/run.log |
+| python-setup.log | Python venv 安装与验证日志 | logs/python-setup.log |
 | agent_tui.log | Claude Agent 会话日志，记录与主人的对话 | logs/agent_tui.log |
 
 ### 日志文件内容整理

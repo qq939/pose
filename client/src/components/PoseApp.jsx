@@ -53,11 +53,26 @@ export default function PoseApp() {
   const startCamera = useCallback(async () => {
     try {
       updateStatus('正在开启摄像头...')
+      if (!window.isSecureContext) {
+        throw new Error('手机摄像头需要 HTTPS，请使用 https://sadsad.fun 访问')
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('浏览器不支持摄像头访问')
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480 }
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          facingMode: 'user'
+        },
+        audio: false
       })
       if (sourceVideoRef.current) {
+        sourceVideoRef.current.muted = true
+        sourceVideoRef.current.setAttribute('playsinline', '')
+        sourceVideoRef.current.setAttribute('webkit-playsinline', '')
         sourceVideoRef.current.srcObject = stream
+        await sourceVideoRef.current.play()
       }
       setCurrentStream(stream)
       setIsCameraActive(true)
@@ -68,6 +83,10 @@ export default function PoseApp() {
         errorMsg = '摄像头访问被拒绝'
       } else if (err.name === 'NotFoundError') {
         errorMsg = '未找到摄像头设备'
+      } else if (err.name === 'NotReadableError') {
+        errorMsg = '摄像头被其他程序占用'
+      } else if (err.name === 'OverconstrainedError') {
+        errorMsg = '摄像头不支持请求的分辨率'
       }
       updateStatus(`摄像头错误: ${errorMsg}`, true)
     }
@@ -110,13 +129,18 @@ export default function PoseApp() {
       })
       
       const result = await response.json()
+      if (!response.ok) {
+        const setupMessage = result.setup?.message ? ` (${result.setup.message})` : ''
+        throw new Error((result.error || '检测服务暂不可用') + setupMessage)
+      }
       if (result.success && result.persons) {
         setLastFrameData(result.persons)
       }
     } catch (e) {
       console.error('Frame detection error:', e)
+      updateStatus(`检测服务准备中: ${e.message}`, true)
     }
-  }, [isCameraActive, confidenceThreshold, lastDetectTime])
+  }, [isCameraActive, confidenceThreshold, lastDetectTime, updateStatus])
 
   const getPoseFromResults = useCallback((videoTime) => {
     if (!detectionResults || !processedVideoPath) return []
@@ -174,11 +198,12 @@ export default function PoseApp() {
       }
     }
 
+    ctx.clearRect(0, 0, canvasDisplayWidth, canvasDisplayHeight)
+    if (video.readyState > 0 && video.videoWidth > 0) {
+      ctx.drawImage(video, 0, 0, canvasDisplayWidth, canvasDisplayHeight)
+    }
+
     if (lastFrameData) {
-      ctx.clearRect(0, 0, canvasDisplayWidth, canvasDisplayHeight)
-      if (video.readyState > 0 && video.videoWidth > 0) {
-        ctx.drawImage(video, 0, 0, canvasDisplayWidth, canvasDisplayHeight)
-      }
       
       const scaleX = canvasDisplayWidth / videoWidth
       const scaleY = canvasDisplayHeight / videoHeight
@@ -216,7 +241,8 @@ export default function PoseApp() {
       setPersonCount(lastFrameData.length)
       setKeypointCount(lastFrameData.reduce((sum, p) => sum + p.keypoints.length, 0))
     } else {
-      ctx.clearRect(0, 0, canvasDisplayWidth, canvasDisplayHeight)
+      setPersonCount(0)
+      setKeypointCount(0)
     }
 
     setFps(video.paused ? 0 : Math.round(30 / (skipFrames + 1)))
@@ -249,7 +275,7 @@ export default function PoseApp() {
         sourceVideoRef.current.src = url
         sourceVideoRef.current.muted = false
       }
-      setIsCameraActive(true)
+      setIsCameraActive(false)
       setLastVideoTime(-1)
       setLastFrameData(null)
       setDetectionResults(null)
@@ -312,6 +338,10 @@ export default function PoseApp() {
       })
       const processResult = await processResponse.json()
       
+      if (!processResponse.ok) {
+        const setupMessage = processResult.setup?.message ? ` (${processResult.setup.message})` : ''
+        throw new Error((processResult.error || '检测服务暂不可用') + setupMessage)
+      }
       if (processResult.error) {
         throw new Error(processResult.error)
       }
@@ -431,7 +461,7 @@ export default function PoseApp() {
         <div style={styles.videoContainer}>
           <div style={styles.videoWrapper}>
             <label style={styles.label}>📺 摄像头 / 视频源</label>
-            <video ref={sourceVideoRef} playsInline controls style={styles.video} />
+            <video ref={sourceVideoRef} playsInline autoPlay muted={isCameraActive} controls style={styles.video} />
           </div>
           <div style={styles.videoWrapper}>
             <label style={styles.label}>✨ YOLO Pose 检测结果</label>
