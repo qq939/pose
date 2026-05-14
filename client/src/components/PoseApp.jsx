@@ -30,6 +30,8 @@ const HAND_CONNECTIONS = [
 ]
 
 const HAND_TIPS = { 4: 'T', 8: 'I', 12: 'M', 16: 'R', 20: 'P' }
+const WHOLEBODY_LEFT_HAND_OFFSET = 91
+const WHOLEBODY_RIGHT_HAND_OFFSET = 112
 
 export default function PoseApp() {
   const sourceVideoRef = useRef(null)
@@ -42,6 +44,7 @@ export default function PoseApp() {
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.3)
   const [samplingRate, setSamplingRate] = useState(0)
   const [targetFps, setTargetFps] = useState(10)
+  const [poseMode, setPoseMode] = useState('yolo133')
   const [lastFrameData, setLastFrameData] = useState(null)
   const [lastHandsData, setLastHandsData] = useState([])
   const [detectionResults, setDetectionResults] = useState(null)
@@ -144,7 +147,7 @@ export default function PoseApp() {
       const response = await fetch(`${API_BASE}api/detect-frame`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageData, confThreshold: confidenceThreshold })
+        body: JSON.stringify({ imageData, confThreshold: confidenceThreshold, poseMode })
       })
       
       const result = await response.json()
@@ -173,7 +176,7 @@ export default function PoseApp() {
       console.error('Frame detection error:', e)
       updateStatus(`检测服务准备中: ${e.message}`, true)
     }
-  }, [isCameraActive, confidenceThreshold, lastDetectTime, targetFps, updateStatus])
+  }, [isCameraActive, confidenceThreshold, lastDetectTime, targetFps, poseMode, updateStatus])
 
   const getPoseFromResults = useCallback((videoTime) => {
     if (!detectionResults || !processedVideoPath) return []
@@ -310,6 +313,46 @@ export default function PoseApp() {
       })
     }
 
+    const drawWholebodyHand = (personKeypoints, offset, color, scaleX, scaleY) => {
+      HAND_CONNECTIONS.forEach(([a, b]) => {
+        const kpA = personKeypoints[offset + a]
+        const kpB = personKeypoints[offset + b]
+        if (kpA && kpB && kpA.confidence > confidenceThreshold && kpB.confidence > confidenceThreshold) {
+          ctx.beginPath()
+          ctx.strokeStyle = 'rgba(0,0,0,0.85)'
+          ctx.lineWidth = 5
+          ctx.moveTo(kpA.x * scaleX, kpA.y * scaleY)
+          ctx.lineTo(kpB.x * scaleX, kpB.y * scaleY)
+          ctx.stroke()
+
+          ctx.beginPath()
+          ctx.strokeStyle = color
+          ctx.lineWidth = 2.5
+          ctx.moveTo(kpA.x * scaleX, kpA.y * scaleY)
+          ctx.lineTo(kpB.x * scaleX, kpB.y * scaleY)
+          ctx.stroke()
+        }
+      })
+    }
+
+    const drawWholebodyExtras = (personKeypoints, color, scaleX, scaleY) => {
+      if (!personKeypoints || personKeypoints.length < 133) return
+      drawWholebodyHand(personKeypoints, WHOLEBODY_LEFT_HAND_OFFSET, '#ffb703', scaleX, scaleY)
+      drawWholebodyHand(personKeypoints, WHOLEBODY_RIGHT_HAND_OFFSET, '#fb5607', scaleX, scaleY)
+      ;[[15, 17], [17, 18], [17, 19], [16, 20], [20, 21], [20, 22]].forEach(([a, b]) => {
+        const kpA = personKeypoints[a]
+        const kpB = personKeypoints[b]
+        if (kpA && kpB && kpA.confidence > confidenceThreshold && kpB.confidence > confidenceThreshold) {
+          ctx.beginPath()
+          ctx.strokeStyle = color
+          ctx.lineWidth = 2
+          ctx.moveTo(kpA.x * scaleX, kpA.y * scaleY)
+          ctx.lineTo(kpB.x * scaleX, kpB.y * scaleY)
+          ctx.stroke()
+        }
+      })
+    }
+
     if ((lastFrameData && lastFrameData.length > 0) || (lastHandsData && lastHandsData.length > 0)) {
       
       const scaleX = canvasDisplayWidth / videoWidth
@@ -333,10 +376,11 @@ export default function PoseApp() {
             ctx.stroke()
           }
         })
+        drawWholebodyExtras(person.keypoints, `hsl(${hue}, 100%, 50%)`, scaleX, scaleY)
 
         person.keypoints.forEach((kp, j) => {
           if (kp.confidence > confidenceThreshold) {
-            const radius = 8 * scaleX
+            const radius = (person.keypoints.length >= 133 ? 3 : 8) * scaleX
             ctx.beginPath()
             ctx.arc(kp.x * scaleX, kp.y * scaleY, radius, 0, Math.PI * 2)
             ctx.fillStyle = `hsl(${hue}, 100%, 50%)`
@@ -379,6 +423,14 @@ export default function PoseApp() {
     setIsDetecting(false)
     cancelAnimationFrame(animationFrameRef.current)
     updateStatus('检测已停止')
+  }, [updateStatus])
+
+  const handlePoseModeChange = useCallback((nextMode) => {
+    setPoseMode(nextMode)
+    setLastVideoTime(-1)
+    setLastFrameData(null)
+    setLastHandsData([])
+    updateStatus(`检测模式: ${nextMode === 'yolo133' ? 'YOLO Pose（133 点）' : 'MediaPipe + YOLO（21 点）'}`)
   }, [updateStatus])
 
   const handleVideoSelect = useCallback((e) => {
@@ -465,7 +517,8 @@ export default function PoseApp() {
           videoPath: `/uploads/${uploadResult.filename}`,
           confThreshold: confidenceThreshold,
           skipFrames: -1,
-          targetFps
+          targetFps,
+          poseMode
         })
       })
       const processResult = await processResponse.json()
@@ -494,7 +547,7 @@ export default function PoseApp() {
     } finally {
       if (progressTimer) window.clearInterval(progressTimer)
     }
-  }, [confidenceThreshold, targetFps, updateStatus])
+  }, [confidenceThreshold, targetFps, poseMode, updateStatus])
 
   const saveDatasetSample = useCallback(async () => {
     if (!isCameraActive || !lastFrameData || lastFrameData.length === 0) {
@@ -662,6 +715,22 @@ export default function PoseApp() {
           />
           <span style={styles.confidenceValue}>{targetFps} FPS</span>
         </div>
+        <div style={styles.modeSwitch} role="radiogroup" aria-label="检测模式">
+          <button
+            type="button"
+            style={{ ...styles.modeButton, ...(poseMode === 'yolo133' ? styles.modeButtonActive : {}) }}
+            onClick={() => handlePoseModeChange('yolo133')}
+          >
+            YOLO Pose（133 点）
+          </button>
+          <button
+            type="button"
+            style={{ ...styles.modeButton, ...(poseMode === 'mediapipe_yolo21' ? styles.modeButtonActive : {}) }}
+            onClick={() => handlePoseModeChange('mediapipe_yolo21')}
+          >
+            MediaPipe + YOLO（21 点）
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -823,5 +892,30 @@ const styles = {
     fontWeight: 'bold',
     color: '#00cc88',
     fontSize: 'clamp(12px, 2.5vw, 14px)'
+  },
+  modeSwitch: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: '8px',
+    marginTop: '15px',
+    padding: '8px',
+    background: 'rgba(0, 0, 0, 0.3)',
+    borderRadius: '8px'
+  },
+  modeButton: {
+    minHeight: '44px',
+    border: '1px solid rgba(255,255,255,0.14)',
+    borderRadius: '6px',
+    background: 'transparent',
+    color: '#c9d8e8',
+    fontWeight: '700',
+    cursor: 'pointer',
+    padding: '8px 10px'
+  },
+  modeButtonActive: {
+    borderColor: '#00d4ff',
+    color: 'white',
+    background: 'rgba(0, 212, 255, 0.24)',
+    boxShadow: 'inset 0 0 0 1px rgba(0, 212, 255, 0.18)'
   }
 }

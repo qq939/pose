@@ -326,9 +326,13 @@ function startStreamWorker() {
   return streamStarting;
 }
 
-async function detectFrameWithWorker(imageData, confThreshold) {
+function normalizePoseMode(poseMode) {
+  return poseMode === 'mediapipe_yolo21' ? 'mediapipe_yolo21' : 'yolo133';
+}
+
+async function detectFrameWithWorker(imageData, confThreshold, poseMode) {
   const worker = await startStreamWorker();
-  const payload = Buffer.from(JSON.stringify({ imageData, confThreshold }));
+  const payload = Buffer.from(JSON.stringify({ imageData, confThreshold, poseMode: normalizePoseMode(poseMode) }));
 
   return new Promise((resolve, reject) => {
     streamPending.push({ resolve, reject });
@@ -351,7 +355,7 @@ async function detectFrameWithWorker(imageData, confThreshold) {
   });
 }
 
-function detectFrameOnce(imageData, confThreshold) {
+function detectFrameOnce(imageData, confThreshold, poseMode) {
   return new Promise((resolve, reject) => {
     let imageBuffer;
     try {
@@ -361,7 +365,7 @@ function detectFrameOnce(imageData, confThreshold) {
       return;
     }
 
-    const pythonProcess = spawn(pythonBin, [pythonScript, 'frame', String(confThreshold || 0.3)]);
+    const pythonProcess = spawn(pythonBin, [pythonScript, 'frame', String(confThreshold || 0.3), normalizePoseMode(poseMode)]);
     let output = '';
     let errorOutput = '';
 
@@ -393,9 +397,9 @@ function detectFrameOnce(imageData, confThreshold) {
   });
 }
 
-async function detectFrame(imageData, confThreshold) {
+async function detectFrame(imageData, confThreshold, poseMode) {
   try {
-    const result = await detectFrameWithWorker(imageData, confThreshold);
+    const result = await detectFrameWithWorker(imageData, confThreshold, poseMode);
     if (result && result.success === false && result.error) {
       log(`Stream worker frame error: ${result.error}`);
     }
@@ -406,7 +410,7 @@ async function detectFrame(imageData, confThreshold) {
     streamStarting = null;
     streamBuffer = Buffer.alloc(0);
     streamPending = [];
-    return detectFrameOnce(imageData, confThreshold);
+    return detectFrameOnce(imageData, confThreshold, poseMode);
   }
 }
 
@@ -501,6 +505,7 @@ app.post(apiRoutes('/api/upload'), upload.single('video'), (req, res) => {
 // Process video with YOLO Pose
 app.post(apiRoutes('/api/process-video'), ensurePythonReady, express.json({ limit: '500mb' }), (req, res) => {
   const { videoPath, confThreshold, skipFrames, targetFps } = req.body;
+  const poseMode = normalizePoseMode(req.body.poseMode);
   const requestId = sanitizeRequestId(req.body.requestId, 'video');
   
   if (!videoPath) {
@@ -515,7 +520,7 @@ app.post(apiRoutes('/api/process-video'), ensurePythonReady, express.json({ limi
   }
   
   const videoStat = fs.statSync(fullPath);
-  log(`Processing video: ${videoPath} with conf=${confThreshold || 0.3}, skip=${skipFrames ?? -1}, targetFps=${targetFps ?? 10}`);
+  log(`Processing video: ${videoPath} with conf=${confThreshold || 0.3}, skip=${skipFrames ?? -1}, targetFps=${targetFps ?? 10}, poseMode=${poseMode}`);
   
   const conf = confThreshold || 0.3;
   const requestedSkip = Number.isFinite(Number(skipFrames)) ? Number(skipFrames) : -1;
@@ -534,7 +539,8 @@ app.post(apiRoutes('/api/process-video'), ensurePythonReady, express.json({ limi
     conf.toString(),
     skip.toString(),
     effectiveTargetFps.toString(),
-    annotatedVideoPath
+    annotatedVideoPath,
+    poseMode
   ];
   debugLog('process-video', 'spawn python process', {
     requestId,
@@ -545,6 +551,7 @@ app.post(apiRoutes('/api/process-video'), ensurePythonReady, express.json({ limi
     skip,
     requestedSkip,
     targetFps: effectiveTargetFps,
+    poseMode,
     sampling: skip < 0 ? `auto target ${effectiveTargetFps} fps` : `every ${skip + 1} frame(s)`,
     annotatedVideoPath,
     pythonBin,
@@ -661,7 +668,8 @@ app.post(apiRoutes('/api/process-video'), ensurePythonReady, express.json({ limi
         resultFilename,
         resultPath: `/results/${resultFilename}`,
         resultVideoFilename: annotatedVideoFilename,
-        resultVideoPath: fs.existsSync(annotatedVideoPath) ? `/results/${annotatedVideoFilename}` : null
+        resultVideoPath: fs.existsSync(annotatedVideoPath) ? `/results/${annotatedVideoFilename}` : null,
+        poseMode
       };
       fs.writeFileSync(resultPath, JSON.stringify(resultWithDownloads, null, 2));
       log(`Video processed: ${result.total_output_frames}/${result.total_input_frames} frames`);
@@ -703,12 +711,13 @@ app.post(apiRoutes('/api/process-video'), ensurePythonReady, express.json({ limi
 // Start real-time pose detection endpoint
 app.post(apiRoutes('/api/detect-frame'), ensurePythonReady, express.json({ limit: '50mb' }), (req, res) => {
   const { imageData, confThreshold } = req.body;
+  const poseMode = normalizePoseMode(req.body.poseMode);
   
   if (!imageData) {
     return res.status(400).json({ error: 'imageData is required' });
   }
   
-  detectFrame(imageData, confThreshold || 0.3)
+  detectFrame(imageData, confThreshold || 0.3, poseMode)
     .then((result) => res.json(result))
     .catch((error) => {
       log(`Frame detection error: ${error.message}`);

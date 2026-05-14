@@ -56,6 +56,23 @@ HAND_TIPS = {
     20: "P"
 }
 
+POSE_MODE_YOLO_133 = "yolo133"
+POSE_MODE_MEDIA_YOLO_21 = "mediapipe_yolo21"
+
+WHOLEBODY_LEFT_HAND_OFFSET = 91
+WHOLEBODY_RIGHT_HAND_OFFSET = 112
+WHOLEBODY_COUNT = 133
+WHOLEBODY_HAND_OFFSETS = {
+    "Left": WHOLEBODY_LEFT_HAND_OFFSET,
+    "Right": WHOLEBODY_RIGHT_HAND_OFFSET
+}
+
+
+def normalize_pose_mode(pose_mode):
+    if pose_mode in ("mediapipe_yolo21", "media_yolo21", "hands21", "mp_yolo21"):
+        return POSE_MODE_MEDIA_YOLO_21
+    return POSE_MODE_YOLO_133
+
 
 def get_detector():
     """
@@ -244,6 +261,159 @@ def estimate_missing_hand_joints(persons, detected_hands, conf_threshold=0.3):
     return detected_hands + estimated
 
 
+def empty_keypoint():
+    return {"x": 0.0, "y": 0.0, "z": 0.0, "confidence": 0.0}
+
+
+def point_from_keypoint(kp):
+    return np.array([kp.get("x", 0.0), kp.get("y", 0.0)], dtype=np.float32)
+
+
+def keypoint_from_xy(xy, confidence, estimated=True):
+    return {
+        "x": float(xy[0]),
+        "y": float(xy[1]),
+        "z": 0.0,
+        "confidence": float(confidence),
+        "estimated": estimated
+    }
+
+
+def body_scale_from_person(keypoints, conf_threshold=0.3):
+    if len(keypoints) > 6:
+        left_shoulder = keypoints[5]
+        right_shoulder = keypoints[6]
+        if left_shoulder.get("confidence", 0) > conf_threshold and right_shoulder.get("confidence", 0) > conf_threshold:
+            return max(np.linalg.norm(point_from_keypoint(left_shoulder) - point_from_keypoint(right_shoulder)), 50.0)
+    return 80.0
+
+
+def estimate_foot_points(keypoints, ankle_idx, knee_idx, side_sign, conf_threshold=0.3):
+    if ankle_idx >= len(keypoints) or keypoints[ankle_idx].get("confidence", 0) <= conf_threshold:
+        return [empty_keypoint(), empty_keypoint(), empty_keypoint()]
+
+    ankle = point_from_keypoint(keypoints[ankle_idx])
+    confidence = keypoints[ankle_idx].get("confidence", 0)
+    if knee_idx < len(keypoints) and keypoints[knee_idx].get("confidence", 0) > conf_threshold:
+        forward = ankle - point_from_keypoint(keypoints[knee_idx])
+    else:
+        forward = np.array([0, 1], dtype=np.float32)
+    norm = np.linalg.norm(forward)
+    forward = forward / norm if norm >= 1 else np.array([0, 1], dtype=np.float32)
+    side = np.array([-forward[1], forward[0]], dtype=np.float32) * side_sign
+    scale = max(body_scale_from_person(keypoints, conf_threshold) * 0.22, 18.0)
+    return [
+        keypoint_from_xy(ankle + forward * scale + side * scale * 0.35, confidence),
+        keypoint_from_xy(ankle + forward * scale - side * scale * 0.35, confidence),
+        keypoint_from_xy(ankle - forward * scale * 0.35, confidence)
+    ]
+
+
+def estimate_face_points(keypoints, conf_threshold=0.3):
+    if not keypoints or keypoints[0].get("confidence", 0) <= conf_threshold:
+        return [empty_keypoint() for _ in range(68)]
+
+    nose = point_from_keypoint(keypoints[0])
+    confidence = keypoints[0].get("confidence", 0)
+    face_width = body_scale_from_person(keypoints, conf_threshold) * 0.72
+    if len(keypoints) > 4 and keypoints[3].get("confidence", 0) > conf_threshold and keypoints[4].get("confidence", 0) > conf_threshold:
+        face_width = max(np.linalg.norm(point_from_keypoint(keypoints[3]) - point_from_keypoint(keypoints[4])) * 1.55, 32.0)
+    elif len(keypoints) > 2 and keypoints[1].get("confidence", 0) > conf_threshold and keypoints[2].get("confidence", 0) > conf_threshold:
+        face_width = max(np.linalg.norm(point_from_keypoint(keypoints[1]) - point_from_keypoint(keypoints[2])) * 3.2, 32.0)
+    face_height = face_width * 1.28
+    center = nose + np.array([0, face_height * 0.13], dtype=np.float32)
+
+    points = []
+    # 17 jawline points
+    for t in np.linspace(np.deg2rad(205), np.deg2rad(335), 17):
+        points.append(keypoint_from_xy(center + np.array([np.cos(t) * face_width * 0.5, np.sin(t) * face_height * 0.5]), confidence))
+    # 10 eyebrow points
+    for side in (-1, 1):
+        brow_center = center + np.array([side * face_width * 0.22, -face_height * 0.22], dtype=np.float32)
+        for offset in np.linspace(-0.16, 0.16, 5):
+            points.append(keypoint_from_xy(brow_center + np.array([offset * face_width, -abs(offset) * face_height * 0.18]), confidence))
+    # 9 nose points
+    for offset in np.linspace(-0.2, 0.2, 5):
+        points.append(keypoint_from_xy(nose + np.array([offset * face_width, abs(offset) * face_height * 0.35]), confidence))
+    for offset in np.linspace(-0.16, 0.16, 4):
+        points.append(keypoint_from_xy(nose + np.array([offset * face_width, face_height * 0.18]), confidence))
+    # 12 eye points
+    for side in (-1, 1):
+        eye_center = center + np.array([side * face_width * 0.22, -face_height * 0.07], dtype=np.float32)
+        for t in np.linspace(0, 2 * np.pi, 6, endpoint=False):
+            points.append(keypoint_from_xy(eye_center + np.array([np.cos(t) * face_width * 0.095, np.sin(t) * face_height * 0.045]), confidence))
+    # 20 mouth points
+    mouth_center = center + np.array([0, face_height * 0.24], dtype=np.float32)
+    for t in np.linspace(0, 2 * np.pi, 12, endpoint=False):
+        points.append(keypoint_from_xy(mouth_center + np.array([np.cos(t) * face_width * 0.22, np.sin(t) * face_height * 0.075]), confidence))
+    for t in np.linspace(0, 2 * np.pi, 8, endpoint=False):
+        points.append(keypoint_from_xy(mouth_center + np.array([np.cos(t) * face_width * 0.12, np.sin(t) * face_height * 0.04]), confidence))
+
+    return points[:68] + [empty_keypoint() for _ in range(max(0, 68 - len(points)))]
+
+
+def hand_for_person_side(hands, person_idx, wrist, label):
+    best = None
+    best_distance = float("inf")
+    wrist_xy = point_from_keypoint(wrist)
+    for hand in hands:
+        if hand.get("label") and hand.get("label") != label:
+            continue
+        keypoints = hand.get("keypoints", [])
+        if not keypoints:
+            continue
+        if hand.get("person_index") == person_idx:
+            return hand
+        distance = np.linalg.norm(wrist_xy - point_from_keypoint(keypoints[0]))
+        if distance < best_distance:
+            best = hand
+            best_distance = distance
+    return best if best_distance < 180 else None
+
+
+def build_wholebody_133(persons, hands, conf_threshold=0.3):
+    wholebody_persons = []
+    for person_idx, person in enumerate(persons):
+        body = person.get("keypoints", [])
+        wholebody = [empty_keypoint() for _ in range(WHOLEBODY_COUNT)]
+        for index, kp in enumerate(body[:17]):
+            wholebody[index] = {**kp, "z": kp.get("z", 0.0)}
+
+        left_foot = estimate_foot_points(body, 15, 13, -1, conf_threshold)
+        right_foot = estimate_foot_points(body, 16, 14, 1, conf_threshold)
+        wholebody[17:20] = left_foot
+        wholebody[20:23] = right_foot
+        wholebody[23:91] = estimate_face_points(body, conf_threshold)
+
+        for label, wrist_idx in (("Left", 9), ("Right", 10)):
+            if wrist_idx >= len(body):
+                continue
+            hand = hand_for_person_side(hands, person_idx, body[wrist_idx], label)
+            if not hand:
+                continue
+            offset = WHOLEBODY_HAND_OFFSETS[label]
+            for point_idx, kp in enumerate(hand.get("keypoints", [])[:21]):
+                wholebody[offset + point_idx] = {**kp, "z": kp.get("z", 0.0)}
+
+        wholebody_persons.append({
+            **person,
+            "keypoints": wholebody,
+            "keypoint_schema": "coco_wholebody_133",
+            "source_keypoints": len(body)
+        })
+    return wholebody_persons
+
+
+def detect_pose(frame, conf_threshold=0.3, pose_mode=POSE_MODE_YOLO_133, hands_detector=None):
+    pose_mode = normalize_pose_mode(pose_mode)
+    persons = detect_frame(frame, conf_threshold)
+    hands = detect_hands(frame, hands_detector) if hands_detector else []
+    hands = estimate_missing_hand_joints(persons, hands, conf_threshold)
+    if pose_mode == POSE_MODE_YOLO_133:
+        return build_wholebody_133(persons, hands, conf_threshold), []
+    return persons, hands
+
+
 def create_hands_detector(static_image_mode=False):
     hands_module = get_hands_detector()
     if not hands_module:
@@ -255,6 +425,28 @@ def create_hands_detector(static_image_mode=False):
         min_detection_confidence=0.25,
         min_tracking_confidence=0.25
     )
+
+
+def draw_wholebody_links(annotated, keypoints, color, conf_threshold):
+    for base in (WHOLEBODY_LEFT_HAND_OFFSET, WHOLEBODY_RIGHT_HAND_OFFSET):
+        for a, b in HAND_CONNECTIONS:
+            a += base
+            b += base
+            if a < len(keypoints) and b < len(keypoints):
+                kp_a = keypoints[a]
+                kp_b = keypoints[b]
+                if kp_a["confidence"] > conf_threshold and kp_b["confidence"] > conf_threshold:
+                    pt_a = (int(kp_a["x"]), int(kp_a["y"]))
+                    pt_b = (int(kp_b["x"]), int(kp_b["y"]))
+                    cv2.line(annotated, pt_a, pt_b, (0, 0, 0), 4)
+                    cv2.line(annotated, pt_a, pt_b, color, 2)
+
+    for a, b in ((15, 17), (17, 18), (17, 19), (16, 20), (20, 21), (20, 22)):
+        if a < len(keypoints) and b < len(keypoints):
+            kp_a = keypoints[a]
+            kp_b = keypoints[b]
+            if kp_a["confidence"] > conf_threshold and kp_b["confidence"] > conf_threshold:
+                cv2.line(annotated, (int(kp_a["x"]), int(kp_a["y"])), (int(kp_b["x"]), int(kp_b["y"])), color, 2)
 
 
 def draw_annotations(frame, persons, hands, conf_threshold=0.3):
@@ -276,10 +468,13 @@ def draw_annotations(frame, persons, hands, conf_threshold=0.3):
                     color,
                     3
                 )
+        if len(keypoints) >= WHOLEBODY_COUNT:
+            draw_wholebody_links(annotated, keypoints, color, conf_threshold)
         for kp in keypoints:
             if kp["confidence"] > conf_threshold:
-                cv2.circle(annotated, (int(kp["x"]), int(kp["y"])), 5, color, -1)
-                cv2.circle(annotated, (int(kp["x"]), int(kp["y"])), 7, (255, 255, 255), 1)
+                radius = 5 if len(keypoints) <= 17 else 3
+                cv2.circle(annotated, (int(kp["x"]), int(kp["y"])), radius, color, -1)
+                cv2.circle(annotated, (int(kp["x"]), int(kp["y"])), radius + 2, (255, 255, 255), 1)
 
     for hand_idx, hand in enumerate(hands):
         keypoints = hand.get("keypoints", [])
@@ -359,6 +554,7 @@ def stream_loop(initial_conf=0.3):
             request = json.loads(payload.decode("utf-8"))
             image_data = request.get("imageData")
             conf = float(request.get("confThreshold", initial_conf))
+            pose_mode = normalize_pose_mode(request.get("poseMode"))
 
             result = {"success": False, "persons": []}
             if image_data:
@@ -366,10 +562,8 @@ def stream_loop(initial_conf=0.3):
                 nparr = np.frombuffer(image_bytes, np.uint8)
                 frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                 if frame is not None:
-                    persons = detect_frame(frame, conf)
-                    hands = detect_hands(frame, hands_detector) if hands_detector else []
-                    hands = estimate_missing_hand_joints(persons, hands, conf)
-                    result = {"success": True, "persons": persons, "hands": hands}
+                    persons, hands = detect_pose(frame, conf, pose_mode, hands_detector)
+                    result = {"success": True, "persons": persons, "hands": hands, "pose_mode": pose_mode}
                 else:
                     result = {"success": False, "error": "Failed to decode frame"}
             else:
@@ -444,14 +638,13 @@ def main():
             sys.exit(0)
         
         conf = float(sys.argv[2]) if len(sys.argv) > 2 else 0.3
-        persons = detect_frame(frame, conf)
+        pose_mode = normalize_pose_mode(sys.argv[3] if len(sys.argv) > 3 else None)
         hands_detector = create_hands_detector(static_image_mode=True)
-        hands = detect_hands(frame, hands_detector) if hands_detector else []
-        hands = estimate_missing_hand_joints(persons, hands, conf)
+        persons, hands = detect_pose(frame, conf, pose_mode, hands_detector)
         if hands_detector:
             hands_detector.close()
         
-        result = {"success": True, "persons": persons, "hands": hands}
+        result = {"success": True, "persons": persons, "hands": hands, "pose_mode": pose_mode}
         print(json.dumps(result))
     
     elif mode == "video":
@@ -482,6 +675,7 @@ def main():
         skip_frames = int(sys.argv[4]) if len(sys.argv) > 4 else -1
         target_fps = float(sys.argv[5]) if len(sys.argv) > 5 else 1.0
         annotated_video_path = sys.argv[6] if len(sys.argv) > 6 else None
+        pose_mode = normalize_pose_mode(sys.argv[7] if len(sys.argv) > 7 else None)
         
         if not Path(video_path).exists():
             print(json.dumps({"error": f"文件不存在: {video_path}"}))
@@ -501,7 +695,7 @@ def main():
             target_fps = max(target_fps, 0.1)
             skip_frames = max(int(round((fps or target_fps) / target_fps)) - 1, 0)
         print(
-            f"Video opened path={video_path} frames={total_frames} fps={fps} size={frame_width}x{frame_height} conf={conf_threshold} skip={skip_frames} auto_sample={auto_sample} target_fps={target_fps}",
+            f"Video opened path={video_path} frames={total_frames} fps={fps} size={frame_width}x{frame_height} conf={conf_threshold} skip={skip_frames} auto_sample={auto_sample} target_fps={target_fps} pose_mode={pose_mode}",
             file=sys.stderr,
             flush=True
         )
@@ -533,9 +727,7 @@ def main():
             
             if skip_frames == 0 or frame_idx % (skip_frames + 1) == 0:
                 try:
-                    persons = detect_frame(frame, conf_threshold)
-                    hands = detect_hands(frame, hands_detector) if hands_detector else []
-                    hands = estimate_missing_hand_joints(persons, hands, conf_threshold)
+                    persons, hands = detect_pose(frame, conf_threshold, pose_mode, hands_detector)
                 except Exception:
                     print(f"Detection failed at frame={frame_idx}", file=sys.stderr, flush=True)
                     traceback.print_exc(file=sys.stderr)
@@ -580,6 +772,8 @@ def main():
             "frame_width": frame_width,
             "frame_height": frame_height,
             "sampling_rate": f"target {target_fps:g} fps" if auto_sample else (f"every {skip_frames + 1} frame(s)" if skip_frames > 0 else "all frames"),
+            "pose_mode": pose_mode,
+            "keypoint_schema": "coco_wholebody_133" if pose_mode == POSE_MODE_YOLO_133 else "yolo17_plus_hand21",
             "annotated_video_path": annotated_video_path,
             "frames": frames_data
         }

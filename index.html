@@ -201,6 +201,38 @@
       font-weight: bold;
       color: #00cc88;
     }
+    .mode-switch {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 15px;
+      padding: 8px;
+      background: rgba(0, 0, 0, 0.32);
+      border-radius: 8px;
+    }
+    .mode-switch input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .mode-switch label {
+      min-height: 44px;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      color: #c9d8e8;
+      cursor: pointer;
+      font-weight: 700;
+      text-align: center;
+      padding: 8px 10px;
+    }
+    .mode-switch input:checked + label {
+      border-color: #00d4ff;
+      color: white;
+      background: rgba(0, 212, 255, 0.24);
+      box-shadow: inset 0 0 0 1px rgba(0, 212, 255, 0.18);
+    }
     @media (max-width: 640px) {
       body {
         padding: 10px;
@@ -249,6 +281,9 @@
       .slider-container input[type="range"] {
         max-width: none;
         width: 100%;
+      }
+      .mode-switch {
+        grid-template-columns: 1fr;
       }
     }
   </style>
@@ -322,6 +357,12 @@
         <input type="range" id="fpsLimitSlider" min="1" max="30" value="10">
         <span class="confidence-value" id="fpsLimitValue">10 FPS</span>
       </div>
+      <div class="mode-switch" role="radiogroup" aria-label="检测模式">
+        <input type="radio" id="modeYolo133" name="poseMode" value="yolo133" checked>
+        <label for="modeYolo133">YOLO Pose（133 点）</label>
+        <input type="radio" id="modeMedia21" name="poseMode" value="mediapipe_yolo21">
+        <label for="modeMedia21">MediaPipe + YOLO（21 点）</label>
+      </div>
     </div>
   </div>
 
@@ -338,6 +379,7 @@
     const uploadArea = document.getElementById('uploadArea');
     const fileNameDiv = document.getElementById('fileName');
     const downloadPoseResult = document.getElementById('downloadPoseResult');
+    const poseModeInputs = document.querySelectorAll('input[name="poseMode"]');
 
     sourceVideo.addEventListener('loadedmetadata', () => {
       if (!isCameraActive) {
@@ -352,6 +394,7 @@
     let currentStream = null;
     let confidenceThreshold = 0.3;
     let fpsLimit = 10;
+    let poseMode = 'yolo133';
     let lastVideoTime = -1;
     let lastFrameData = null;
     let lastHandsData = [];
@@ -431,6 +474,19 @@
       [5, 9], [9, 13], [13, 17]
     ];
     const HAND_TIPS = { 4: 'T', 8: 'I', 12: 'M', 16: 'R', 20: 'P' };
+    const WHOLEBODY_LEFT_HAND_OFFSET = 91;
+    const WHOLEBODY_RIGHT_HAND_OFFSET = 112;
+
+    poseModeInputs.forEach(input => {
+      input.addEventListener('change', () => {
+        poseMode = document.querySelector('input[name="poseMode"]:checked')?.value || 'yolo133';
+        lastVideoTime = -1;
+        lastFrameData = null;
+        lastHandsData = [];
+        updateStatus(`检测模式: ${poseMode === 'yolo133' ? 'YOLO Pose（133 点）' : 'MediaPipe + YOLO（21 点）'}`);
+        renderPoseFrame();
+      });
+    });
 
     function setPoseFrameSize(width, height) {
       poseFrameWidth = width || 640;
@@ -522,6 +578,46 @@
       });
     }
 
+    function drawWholebodyHand(personKeypoints, offset, color, scaleX, scaleY) {
+      HAND_CONNECTIONS.forEach(([a, b]) => {
+        const kpA = personKeypoints[offset + a];
+        const kpB = personKeypoints[offset + b];
+        if (kpA && kpB && kpA.confidence > confidenceThreshold && kpB.confidence > confidenceThreshold) {
+          ctx.beginPath();
+          ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+          ctx.lineWidth = 5;
+          ctx.moveTo(kpA.x * scaleX, kpA.y * scaleY);
+          ctx.lineTo(kpB.x * scaleX, kpB.y * scaleY);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2.5;
+          ctx.moveTo(kpA.x * scaleX, kpA.y * scaleY);
+          ctx.lineTo(kpB.x * scaleX, kpB.y * scaleY);
+          ctx.stroke();
+        }
+      });
+    }
+
+    function drawWholebodyExtras(personKeypoints, color, scaleX, scaleY) {
+      if (!personKeypoints || personKeypoints.length < 133) return;
+      drawWholebodyHand(personKeypoints, WHOLEBODY_LEFT_HAND_OFFSET, '#ffb703', scaleX, scaleY);
+      drawWholebodyHand(personKeypoints, WHOLEBODY_RIGHT_HAND_OFFSET, '#fb5607', scaleX, scaleY);
+      [[15, 17], [17, 18], [17, 19], [16, 20], [20, 21], [20, 22]].forEach(([a, b]) => {
+        const kpA = personKeypoints[a];
+        const kpB = personKeypoints[b];
+        if (kpA && kpB && kpA.confidence > confidenceThreshold && kpB.confidence > confidenceThreshold) {
+          ctx.beginPath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.moveTo(kpA.x * scaleX, kpA.y * scaleY);
+          ctx.lineTo(kpB.x * scaleX, kpB.y * scaleY);
+          ctx.stroke();
+        }
+      });
+    }
+
     function drawKeypoints(persons, hands, canvasWidth, canvasHeight, scaleX, scaleY) {
       drawCurrentFrame(canvasWidth, canvasHeight);
 
@@ -542,11 +638,12 @@
             ctx.stroke();
           }
         });
+        drawWholebodyExtras(person.keypoints, `hsl(${hue}, 100%, 50%)`, scaleX, scaleY);
 
         // Draw keypoints (应用缩放)
         person.keypoints.forEach((kp, j) => {
           if (kp.confidence > confidenceThreshold) {
-            const radius = 8 * scaleX;
+            const radius = (person.keypoints.length >= 133 ? 3 : 8) * scaleX;
             ctx.beginPath();
             ctx.arc(kp.x * scaleX, kp.y * scaleY, radius, 0, Math.PI * 2);
             ctx.fillStyle = `hsl(${hue}, 100%, 50%)`;
@@ -556,7 +653,7 @@
             ctx.stroke();
 
             // Draw label
-            if (kp.confidence > confidenceThreshold + 0.3) {
+            if (KEYPOINT_NAMES[j] && kp.confidence > confidenceThreshold + 0.3) {
               ctx.fillStyle = 'white';
               ctx.font = `${12 * scaleX}px Arial`;
               ctx.fillText(KEYPOINT_NAMES[j], kp.x * scaleX + 10, kp.y * scaleY);
@@ -619,7 +716,7 @@
         const response = await fetch('/api/detect-frame', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageData, confThreshold: confidenceThreshold })
+          body: JSON.stringify({ imageData, confThreshold: confidenceThreshold, poseMode })
         });
         
         const result = await response.json();
@@ -986,7 +1083,8 @@
             videoPath: `/uploads/${uploadResult.filename}`,
             confThreshold: confidenceThreshold,
             skipFrames: -1,
-            targetFps: fpsLimit
+            targetFps: fpsLimit,
+            poseMode
           })
         });
         const processResult = await processResponse.json();
