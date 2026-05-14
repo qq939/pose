@@ -411,7 +411,13 @@ async function detectFrame(imageData, confThreshold) {
 }
 
 // Routes
-app.get('/', (req, res) => {
+function apiRoutes(routePath) {
+  const normalized = routePath.startsWith('/') ? routePath : `/${routePath}`;
+  const prefixed = `${API_BASE}${normalized.slice(1)}`;
+  return API_BASE && prefixed !== normalized ? [normalized, prefixed] : [normalized];
+}
+
+app.get(API_BASE ? ['/', API_BASE] : '/', (req, res) => {
   if (!isPythonReady()) {
     res.status(503).send(setupPage(getSetupStatus()));
     return;
@@ -419,7 +425,7 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.get('/api/status', (req, res) => {
+app.get(apiRoutes('/api/status'), (req, res) => {
   res.json({
     status: 'running',
     pythonReady: isPythonReady(),
@@ -428,11 +434,11 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-app.get('/api/setup-status', (req, res) => {
+app.get(apiRoutes('/api/setup-status'), (req, res) => {
   res.json(getSetupStatus());
 });
 
-app.get('/api/process-progress/:requestId', (req, res) => {
+app.get(apiRoutes('/api/process-progress/:requestId'), (req, res) => {
   const requestId = sanitizeRequestId(req.params.requestId);
   res.json(videoProgress.get(requestId) || {
     requestId,
@@ -472,7 +478,7 @@ app.use('/results', express.static(resultsDir, {
 }));
 
 // Video upload endpoint
-app.post('/api/upload', upload.single('video'), (req, res) => {
+app.post(apiRoutes('/api/upload'), upload.single('video'), (req, res) => {
   if (!req.file) {
     debugLog('upload', 'missing video file');
     return res.status(400).json({ error: 'No video file uploaded' });
@@ -493,7 +499,7 @@ app.post('/api/upload', upload.single('video'), (req, res) => {
 });
 
 // Process video with YOLO Pose
-app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' }), (req, res) => {
+app.post(apiRoutes('/api/process-video'), ensurePythonReady, express.json({ limit: '500mb' }), (req, res) => {
   const { videoPath, confThreshold, skipFrames, targetFps } = req.body;
   const requestId = sanitizeRequestId(req.body.requestId, 'video');
   
@@ -695,7 +701,7 @@ app.post('/api/process-video', ensurePythonReady, express.json({ limit: '500mb' 
 });
 
 // Start real-time pose detection endpoint
-app.post('/api/detect-frame', ensurePythonReady, express.json({ limit: '50mb' }), (req, res) => {
+app.post(apiRoutes('/api/detect-frame'), ensurePythonReady, express.json({ limit: '50mb' }), (req, res) => {
   const { imageData, confThreshold } = req.body;
   
   if (!imageData) {
@@ -711,7 +717,7 @@ app.post('/api/detect-frame', ensurePythonReady, express.json({ limit: '50mb' })
 });
 
 // Dataset collection endpoint
-app.post('/api/save-dataset', express.json({ limit: '50mb' }), (req, res) => {
+app.post(apiRoutes('/api/save-dataset'), express.json({ limit: '50mb' }), (req, res) => {
   const { imageData, labelData, sampleIndex } = req.body;
   
   if (!imageData || !labelData) {
