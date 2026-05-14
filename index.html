@@ -233,6 +233,23 @@
       background: rgba(0, 212, 255, 0.24);
       box-shadow: inset 0 0 0 1px rgba(0, 212, 255, 0.18);
     }
+    .toggle-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 15px;
+      padding: 15px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 8px;
+      color: #c9d8e8;
+      font-weight: 700;
+    }
+    .toggle-container input {
+      width: 20px;
+      height: 20px;
+      accent-color: #00d4ff;
+    }
     @media (max-width: 640px) {
       body {
         padding: 10px;
@@ -284,6 +301,9 @@
       }
       .mode-switch {
         grid-template-columns: 1fr;
+      }
+      .toggle-container {
+        justify-content: flex-start;
       }
     }
   </style>
@@ -363,6 +383,10 @@
         <input type="radio" id="modeMedia21" name="poseMode" value="mediapipe_yolo21">
         <label for="modeMedia21">MediaPipe + YOLO（21 点）</label>
       </div>
+      <label class="toggle-container" for="fakeHandJoints">
+        <input type="checkbox" id="fakeHandJoints">
+        <span>fake渲染指关节</span>
+      </label>
     </div>
   </div>
 
@@ -380,6 +404,7 @@
     const fileNameDiv = document.getElementById('fileName');
     const downloadPoseResult = document.getElementById('downloadPoseResult');
     const poseModeInputs = document.querySelectorAll('input[name="poseMode"]');
+    const fakeHandJointsInput = document.getElementById('fakeHandJoints');
 
     sourceVideo.addEventListener('loadedmetadata', () => {
       if (!isCameraActive) {
@@ -395,6 +420,7 @@
     let confidenceThreshold = 0.3;
     let fpsLimit = 10;
     let poseMode = 'yolo133';
+    let fakeHandJoints = false;
     let lastVideoTime = -1;
     let lastFrameData = null;
     let lastHandsData = [];
@@ -486,6 +512,14 @@
         updateStatus(`检测模式: ${poseMode === 'yolo133' ? 'YOLO Pose（133 点）' : 'MediaPipe + YOLO（21 点）'}`);
         renderPoseFrame();
       });
+    });
+    fakeHandJointsInput.addEventListener('change', () => {
+      fakeHandJoints = fakeHandJointsInput.checked;
+      lastVideoTime = -1;
+      lastFrameData = null;
+      lastHandsData = [];
+      updateStatus(`fake渲染指关节: ${fakeHandJoints ? '开启' : '关闭'}`);
+      renderPoseFrame();
     });
 
     function setPoseFrameSize(width, height) {
@@ -716,7 +750,7 @@
         const response = await fetch('/api/detect-frame', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageData, confThreshold: confidenceThreshold, poseMode })
+          body: JSON.stringify({ imageData, confThreshold: confidenceThreshold, poseMode, fakeHandJoints })
         });
         
         const result = await response.json();
@@ -1084,7 +1118,8 @@
             confThreshold: confidenceThreshold,
             skipFrames: -1,
             targetFps: fpsLimit,
-            poseMode
+            poseMode,
+            fakeHandJoints
           })
         });
         const processResult = await processResponse.json();

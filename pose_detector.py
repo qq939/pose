@@ -74,6 +74,14 @@ def normalize_pose_mode(pose_mode):
     return POSE_MODE_YOLO_133
 
 
+def parse_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 def get_detector():
     """
     输入：无
@@ -404,11 +412,12 @@ def build_wholebody_133(persons, hands, conf_threshold=0.3):
     return wholebody_persons
 
 
-def detect_pose(frame, conf_threshold=0.3, pose_mode=POSE_MODE_YOLO_133, hands_detector=None):
+def detect_pose(frame, conf_threshold=0.3, pose_mode=POSE_MODE_YOLO_133, hands_detector=None, fake_hand_joints=False):
     pose_mode = normalize_pose_mode(pose_mode)
     persons = detect_frame(frame, conf_threshold)
     hands = detect_hands(frame, hands_detector) if hands_detector else []
-    hands = estimate_missing_hand_joints(persons, hands, conf_threshold)
+    if fake_hand_joints:
+        hands = estimate_missing_hand_joints(persons, hands, conf_threshold)
     if pose_mode == POSE_MODE_YOLO_133:
         return build_wholebody_133(persons, hands, conf_threshold), []
     return persons, hands
@@ -555,6 +564,7 @@ def stream_loop(initial_conf=0.3):
             image_data = request.get("imageData")
             conf = float(request.get("confThreshold", initial_conf))
             pose_mode = normalize_pose_mode(request.get("poseMode"))
+            fake_hand_joints = parse_bool(request.get("fakeHandJoints"), False)
 
             result = {"success": False, "persons": []}
             if image_data:
@@ -562,8 +572,8 @@ def stream_loop(initial_conf=0.3):
                 nparr = np.frombuffer(image_bytes, np.uint8)
                 frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                 if frame is not None:
-                    persons, hands = detect_pose(frame, conf, pose_mode, hands_detector)
-                    result = {"success": True, "persons": persons, "hands": hands, "pose_mode": pose_mode}
+                    persons, hands = detect_pose(frame, conf, pose_mode, hands_detector, fake_hand_joints)
+                    result = {"success": True, "persons": persons, "hands": hands, "pose_mode": pose_mode, "fake_hand_joints": fake_hand_joints}
                 else:
                     result = {"success": False, "error": "Failed to decode frame"}
             else:
@@ -639,12 +649,13 @@ def main():
         
         conf = float(sys.argv[2]) if len(sys.argv) > 2 else 0.3
         pose_mode = normalize_pose_mode(sys.argv[3] if len(sys.argv) > 3 else None)
+        fake_hand_joints = parse_bool(sys.argv[4] if len(sys.argv) > 4 else None, False)
         hands_detector = create_hands_detector(static_image_mode=True)
-        persons, hands = detect_pose(frame, conf, pose_mode, hands_detector)
+        persons, hands = detect_pose(frame, conf, pose_mode, hands_detector, fake_hand_joints)
         if hands_detector:
             hands_detector.close()
         
-        result = {"success": True, "persons": persons, "hands": hands, "pose_mode": pose_mode}
+        result = {"success": True, "persons": persons, "hands": hands, "pose_mode": pose_mode, "fake_hand_joints": fake_hand_joints}
         print(json.dumps(result))
     
     elif mode == "video":
@@ -676,6 +687,7 @@ def main():
         target_fps = float(sys.argv[5]) if len(sys.argv) > 5 else 1.0
         annotated_video_path = sys.argv[6] if len(sys.argv) > 6 else None
         pose_mode = normalize_pose_mode(sys.argv[7] if len(sys.argv) > 7 else None)
+        fake_hand_joints = parse_bool(sys.argv[8] if len(sys.argv) > 8 else None, False)
         
         if not Path(video_path).exists():
             print(json.dumps({"error": f"文件不存在: {video_path}"}))
@@ -695,7 +707,7 @@ def main():
             target_fps = max(target_fps, 0.1)
             skip_frames = max(int(round((fps or target_fps) / target_fps)) - 1, 0)
         print(
-            f"Video opened path={video_path} frames={total_frames} fps={fps} size={frame_width}x{frame_height} conf={conf_threshold} skip={skip_frames} auto_sample={auto_sample} target_fps={target_fps} pose_mode={pose_mode}",
+            f"Video opened path={video_path} frames={total_frames} fps={fps} size={frame_width}x{frame_height} conf={conf_threshold} skip={skip_frames} auto_sample={auto_sample} target_fps={target_fps} pose_mode={pose_mode} fake_hand_joints={fake_hand_joints}",
             file=sys.stderr,
             flush=True
         )
@@ -727,7 +739,7 @@ def main():
             
             if skip_frames == 0 or frame_idx % (skip_frames + 1) == 0:
                 try:
-                    persons, hands = detect_pose(frame, conf_threshold, pose_mode, hands_detector)
+                    persons, hands = detect_pose(frame, conf_threshold, pose_mode, hands_detector, fake_hand_joints)
                 except Exception:
                     print(f"Detection failed at frame={frame_idx}", file=sys.stderr, flush=True)
                     traceback.print_exc(file=sys.stderr)
@@ -773,6 +785,7 @@ def main():
             "frame_height": frame_height,
             "sampling_rate": f"target {target_fps:g} fps" if auto_sample else (f"every {skip_frames + 1} frame(s)" if skip_frames > 0 else "all frames"),
             "pose_mode": pose_mode,
+            "fake_hand_joints": fake_hand_joints,
             "keypoint_schema": "coco_wholebody_133" if pose_mode == POSE_MODE_YOLO_133 else "yolo17_plus_hand21",
             "annotated_video_path": annotated_video_path,
             "frames": frames_data

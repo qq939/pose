@@ -45,6 +45,7 @@ export default function PoseApp() {
   const [samplingRate, setSamplingRate] = useState(0)
   const [targetFps, setTargetFps] = useState(10)
   const [poseMode, setPoseMode] = useState('yolo133')
+  const [fakeHandJoints, setFakeHandJoints] = useState(false)
   const [lastFrameData, setLastFrameData] = useState(null)
   const [lastHandsData, setLastHandsData] = useState([])
   const [detectionResults, setDetectionResults] = useState(null)
@@ -147,7 +148,7 @@ export default function PoseApp() {
       const response = await fetch(`${API_BASE}api/detect-frame`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageData, confThreshold: confidenceThreshold, poseMode })
+        body: JSON.stringify({ imageData, confThreshold: confidenceThreshold, poseMode, fakeHandJoints })
       })
       
       const result = await response.json()
@@ -176,7 +177,7 @@ export default function PoseApp() {
       console.error('Frame detection error:', e)
       updateStatus(`检测服务准备中: ${e.message}`, true)
     }
-  }, [isCameraActive, confidenceThreshold, lastDetectTime, targetFps, poseMode, updateStatus])
+  }, [isCameraActive, confidenceThreshold, lastDetectTime, targetFps, poseMode, fakeHandJoints, updateStatus])
 
   const getPoseFromResults = useCallback((videoTime) => {
     if (!detectionResults || !processedVideoPath) return []
@@ -433,6 +434,14 @@ export default function PoseApp() {
     updateStatus(`检测模式: ${nextMode === 'yolo133' ? 'YOLO Pose（133 点）' : 'MediaPipe + YOLO（21 点）'}`)
   }, [updateStatus])
 
+  const handleFakeHandJointsChange = useCallback((enabled) => {
+    setFakeHandJoints(enabled)
+    setLastVideoTime(-1)
+    setLastFrameData(null)
+    setLastHandsData([])
+    updateStatus(`fake渲染指关节: ${enabled ? '开启' : '关闭'}`)
+  }, [updateStatus])
+
   const handleVideoSelect = useCallback((e) => {
     const file = e.target.files?.[0]
     if (file) {
@@ -518,7 +527,8 @@ export default function PoseApp() {
           confThreshold: confidenceThreshold,
           skipFrames: -1,
           targetFps,
-          poseMode
+          poseMode,
+          fakeHandJoints
         })
       })
       const processResult = await processResponse.json()
@@ -547,7 +557,7 @@ export default function PoseApp() {
     } finally {
       if (progressTimer) window.clearInterval(progressTimer)
     }
-  }, [confidenceThreshold, targetFps, poseMode, updateStatus])
+  }, [confidenceThreshold, targetFps, poseMode, fakeHandJoints, updateStatus])
 
   const saveDatasetSample = useCallback(async () => {
     if (!isCameraActive || !lastFrameData || lastFrameData.length === 0) {
@@ -731,6 +741,15 @@ export default function PoseApp() {
             MediaPipe + YOLO（21 点）
           </button>
         </div>
+        <label style={styles.toggleContainer}>
+          <input
+            type="checkbox"
+            checked={fakeHandJoints}
+            onChange={(e) => handleFakeHandJointsChange(e.target.checked)}
+            style={styles.checkbox}
+          />
+          <span>fake渲染指关节</span>
+        </label>
       </div>
     </div>
   )
@@ -917,5 +936,22 @@ const styles = {
     color: 'white',
     background: 'rgba(0, 212, 255, 0.24)',
     boxShadow: 'inset 0 0 0 1px rgba(0, 212, 255, 0.18)'
+  },
+  toggleContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '12px',
+    marginTop: '15px',
+    padding: '15px',
+    background: 'rgba(0, 0, 0, 0.3)',
+    borderRadius: '8px',
+    color: '#c9d8e8',
+    fontWeight: '700'
+  },
+  checkbox: {
+    width: '20px',
+    height: '20px',
+    accentColor: '#00d4ff'
   }
 }
