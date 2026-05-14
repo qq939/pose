@@ -99,35 +99,38 @@ def read_exactly(stream, size):
 
 
 def stream_loop(initial_conf=0.3):
-    get_detector()
     output = sys.stdout.buffer
     input_stream = sys.stdin.buffer
 
     while True:
-        header = read_exactly(input_stream, 4)
-        if header is None:
-            break
+        try:
+            header = read_exactly(input_stream, 4)
+            if header is None:
+                break
 
-        payload_size = struct.unpack(">I", header)[0]
-        payload = read_exactly(input_stream, payload_size)
-        if payload is None:
-            break
+            payload_size = struct.unpack(">I", header)[0]
+            payload = read_exactly(input_stream, payload_size)
+            if payload is None:
+                break
 
-        request = json.loads(payload.decode("utf-8"))
-        image_data = request.get("imageData")
-        conf = float(request.get("confThreshold", initial_conf))
+            request = json.loads(payload.decode("utf-8"))
+            image_data = request.get("imageData")
+            conf = float(request.get("confThreshold", initial_conf))
 
-        result = {"success": False, "persons": []}
-        if image_data:
-            image_bytes = base64.b64decode(image_data)
-            nparr = np.frombuffer(image_bytes, np.uint8)
-            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if frame is not None:
-                result = {"success": True, "persons": detect_frame(frame, conf)}
+            result = {"success": False, "persons": []}
+            if image_data:
+                image_bytes = base64.b64decode(image_data)
+                nparr = np.frombuffer(image_bytes, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if frame is not None:
+                    result = {"success": True, "persons": detect_frame(frame, conf)}
+                else:
+                    result = {"success": False, "error": "Failed to decode frame"}
             else:
-                result = {"success": False, "error": "Failed to decode frame"}
-        else:
-            result = {"success": False, "error": "imageData is required"}
+                result = {"success": False, "error": "imageData is required"}
+        except Exception as error:
+            print(f"stream request error: {error}", file=sys.stderr, flush=True)
+            result = {"success": False, "error": str(error)}
 
         response = json.dumps(result).encode("utf-8")
         output.write(struct.pack(">I", len(response)))
@@ -187,6 +190,9 @@ def main():
         image_data = sys.stdin.buffer.read()
         nparr = np.frombuffer(image_data, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if frame is None:
+            print(json.dumps({"success": False, "error": "Failed to decode frame"}))
+            sys.exit(0)
         
         conf = float(sys.argv[2]) if len(sys.argv) > 2 else 0.3
         persons = detect_frame(frame, conf)

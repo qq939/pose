@@ -240,9 +240,78 @@ async function detectFrameWithWorker(imageData, confThreshold) {
     const header = Buffer.alloc(4);
     header.writeUInt32BE(payload.length, 0);
 
-    worker.stdin.write(header);
-    worker.stdin.write(payload);
+    const failPending = (error) => {
+      const index = streamPending.findIndex((pending) => pending.resolve === resolve);
+      if (index >= 0) streamPending.splice(index, 1);
+      reject(error);
+    };
+
+    worker.stdin.write(header, (error) => {
+      if (error) failPending(error);
+    });
+    worker.stdin.write(payload, (error) => {
+      if (error) failPending(error);
+    });
   });
+}
+
+function detectFrameOnce(imageData, confThreshold) {
+  return new Promise((resolve, reject) => {
+    let imageBuffer;
+    try {
+      imageBuffer = Buffer.from(imageData, 'base64');
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    const pythonProcess = spawn(pythonBin, [pythonScript, 'frame', String(confThreshold || 0.3)]);
+    let output = '';
+    let errorOutput = '';
+
+    pythonProcess.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+      log(`Frame fallback stderr: ${data.toString().trim()}`);
+    });
+
+    pythonProcess.on('error', reject);
+
+    pythonProcess.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(errorOutput || `Frame fallback exited with code ${code}`));
+        return;
+      }
+
+      try {
+        resolve(parsePythonJsonOutput(output));
+      } catch (error) {
+        reject(error);
+      }
+    });
+
+    pythonProcess.stdin.end(imageBuffer);
+  });
+}
+
+async function detectFrame(imageData, confThreshold) {
+  try {
+    const result = await detectFrameWithWorker(imageData, confThreshold);
+    if (result && result.success === false && result.error) {
+      log(`Stream worker frame error: ${result.error}`);
+    }
+    return result;
+  } catch (error) {
+    log(`Stream worker failed, falling back to one-shot frame detection: ${error.message}`);
+    streamWorker = null;
+    streamStarting = null;
+    streamBuffer = Buffer.alloc(0);
+    streamPending = [];
+    return detectFrameOnce(imageData, confThreshold);
+  }
 }
 
 // Routes
@@ -369,7 +438,7 @@ app.post('/api/detect-frame', ensurePythonReady, express.json({ limit: '50mb' })
     return res.status(400).json({ error: 'imageData is required' });
   }
   
-  detectFrameWithWorker(imageData, confThreshold || 0.3)
+  detectFrame(imageData, confThreshold || 0.3)
     .then((result) => res.json(result))
     .catch((error) => {
       log(`Frame detection error: ${error.message}`);
